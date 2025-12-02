@@ -10,7 +10,21 @@ export_credentials.cfg
 # Imported translations (automatically generated from CSV files)
 *.translation
 
-# Mono-specific ignores
+# Mono-specific ignores (Si usas C#)
 .mono/
 data_*/
 mono_crash.*.json
+
+# --- LIMPIEZA ADICIONAL (IMPORTANTE) ---
+
+# Carpetas de compilación y exportación temporal
+builds/
+bin/
+
+# Archivos temporales y basura del sistema operativo
+*.tmp
+*.bak
+*.log
+.DS_Store
+thumbs.db
+desktop.ini
