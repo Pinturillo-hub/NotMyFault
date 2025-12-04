@@ -1,0 +1,14 @@
+[gd_resource type="ShaderMaterial" load_steps=3 format=3 uid="uid://wkfphmsomar5"]
+
+[ext_resource type="Shader" uid="uid://c2ebus1k8dndq" path="res://assets/materials/plastilina.gdshader.gdshader" id="1_wqrga"]
+[ext_resource type="Texture2D" uid="uid://cdjhvlhh2vtld" path="res://assets/materials/paleta_juego.png" id="2_dbbs1"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_wqrga")
+shader_parameter/textura_paleta = ExtResource("2_dbbs1")
+shader_parameter/roughness = 0.8
+shader_parameter/specular = 0.2
+shader_parameter/deformacion_vertex = 0.005
+shader_parameter/ruido_escala = 50.0
+shader_parameter/ruido_fuerza = 0.1

@@ -1,0 +1,97 @@
+[gd_scene load_steps=8 format=3 uid="uid://b3pttwwm6vxab"]
+
+[ext_resource type="Script" uid="uid://byv2nfnfl4cwp" path="res://entities/player/jugador.gd" id="1_f7wae"]
+[ext_resource type="PackedScene" uid="uid://dftw54xpxwgto" path="res://assets/models/cocodrilo.glb" id="2_ml0ux"]
+[ext_resource type="PackedScene" uid="uid://bbccn8o8ee864" path="res://entities/hand/mano.tscn" id="2_rfplf"]
+
+[sub_resource type="PhysicsMaterial" id="PhysicsMaterial_43k7d"]
+friction = 0.0
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_rfplf"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_shl25"]
+
+[sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_pfvk3"]
+properties/0/path = NodePath(".:linear_velocity")
+properties/0/spawn = true
+properties/0/replication_mode = 1
+properties/1/path = NodePath(".:position")
+properties/1/spawn = true
+properties/1/replication_mode = 1
+properties/2/path = NodePath(".:rotation")
+properties/2/spawn = true
+properties/2/replication_mode = 1
+properties/3/path = NodePath("Cabeza:rotation")
+properties/3/spawn = true
+properties/3/replication_mode = 1
+
+[node name="Jugador" type="RigidBody3D"]
+collision_layer = 2
+axis_lock_angular_x = true
+axis_lock_angular_z = true
+physics_material_override = SubResource("PhysicsMaterial_43k7d")
+script = ExtResource("1_f7wae")
+
+[node name="ModeloCocodrilo" parent="." instance=ExtResource("2_ml0ux")]
+transform = Transform3D(-1.585, 0, -2.3932836e-07, 0, 1.585, 0, 2.3932836e-07, 0, -1.585, 0, 0.42931747, 0)
+
+[node name="BolsilloAttachment" type="BoneAttachment3D" parent="ModeloCocodrilo/Armature/Skeleton3D" index="0"]
+transform = Transform3D(1, -1.4210855e-13, 2.5288102e-07, -1.0004073e-07, 0.9184211, 0.39560443, -2.3225141e-07, -0.39560446, 0.9184209, 9.0667307e-10, 0.6666366, 0.07255995)
+bone_name = "spine.001"
+bone_idx = 1
+
+[node name="BultoVisual" type="MeshInstance3D" parent="ModeloCocodrilo/Armature/Skeleton3D/BolsilloAttachment"]
+transform = Transform3D(0.116, -1.1537331e-08, 6.7645534e-10, 1.7915061e-08, 0.06391883, -0.028537402, 6.7707826e-09, 0.028537402, 0.06391883, -0.11250216, 0.12528881, -0.29086602)
+mesh = SubResource("CylinderMesh_rfplf")
+
+[node name="PartesOcultables" parent="ModeloCocodrilo" index="2"]
+layers = 2
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.024264038, 0)
+shape = SubResource("CapsuleShape3D_shl25")
+
+[node name="Cabeza" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.413, -0.71254766)
+
+[node name="Camera3D" type="Camera3D" parent="Cabeza"]
+cull_mask = 1048573
+
+[node name="RayCast3D" type="RayCast3D" parent="Cabeza"]
+target_position = Vector3(0, 0, -3)
+
+[node name="ManoIzquierda" parent="Cabeza" instance=ExtResource("2_rfplf")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.413, 0.2)
+offset_reposo_cuerpo = Vector3(0.5, 0.7, -0.6)
+
+[node name="PosicionAccion" parent="Cabeza/ManoIzquierda" index="1"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.4, 1.1826484, -1.0523126)
+
+[node name="ManoDerecha" parent="Cabeza" instance=ExtResource("2_rfplf")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.413, 0.2)
+offset_reposo_cuerpo = Vector3(0.5, 0.7, -0.6)
+
+[node name="PosicionAccion" parent="Cabeza/ManoDerecha" index="1"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.4, 1.1826484, -1.0523126)
+
+[node name="Interfaz" type="CanvasLayer" parent="."]
+
+[node name="Centro" type="CenterContainer" parent="Interfaz"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+
+[node name="Cruceta" type="ColorRect" parent="Interfaz/Centro"]
+custom_minimum_size = Vector2(4, 4)
+layout_mode = 2
+
+[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="."]
+replication_config = SubResource("SceneReplicationConfig_pfvk3")
+
+[editable path="ModeloCocodrilo"]
+[editable path="Cabeza/ManoIzquierda"]
+[editable path="Cabeza/ManoDerecha"]
