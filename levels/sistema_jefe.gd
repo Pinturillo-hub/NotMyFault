@@ -13,7 +13,7 @@ func _ready():
 	if multiplayer.is_server():
 		_iniciar_rutina_trabajo()
 
-func _process(_delta): # Guion bajo para evitar warning
+func _process(_delta):
 	pass
 
 # --- CEREBRO ---
@@ -38,7 +38,7 @@ func _salir_a_inspeccionar():
 	_cambiar_estado.rpc(Estado.INSPECCIONANDO)
 	print("[JEFE] ¡A VER!")
 	
-	_verificar_culpables() # La guadaña
+	_verificar_culpables()
 	
 	await get_tree().create_timer(duracion_inspeccion).timeout
 	if estado_actual != Estado.FIN_PARTIDA:
@@ -50,7 +50,6 @@ func _salir_a_inspeccionar():
 @rpc("authority", "call_local", "reliable")
 func _cambiar_estado(nuevo_estado):
 	estado_actual = nuevo_estado
-	# Aquí meteremos luces y sonidos luego
 
 func _verificar_culpables():
 	# 1. BUSCAR OBJETO ROTO HUÉRFANO (En el suelo)
@@ -58,29 +57,30 @@ func _verificar_culpables():
 	var panico_total = false
 	
 	for obj in objetos_ilegales:
-		# Si nadie lo tiene agarrado (id_sostenedor == 0) Y no está en un bolsillo
-		if obj.id_sostenedor_1 == 0 and obj._en_bolsillo_de_id == 0:
+		# Corregido acceso a variable: ahora es 'en_bolsillo_de_id' (sin guion bajo si es export, o con guion según tu script objeto_agarrable)
+		# En el script que te di arriba es 'en_bolsillo_de_id' (pública para el inspector/rpc)
+		if obj.id_sostenedor_1 == 0 and obj.en_bolsillo_de_id == 0:
 			panico_total = true
 			break
 	
 	if panico_total:
 		print("¡DESASTRE! EL JEFE ENCONTRÓ EL OBJETO EN EL SUELO.")
-		_game_over_global.rpc() # Todos pierden
+		_game_over_global.rpc()
 		return
 
 	# 2. ESCANEAR JUGADORES (MANOS Y BOLSILLOS)
 	var jugadores = get_tree().get_nodes_in_group("jugadores")
 	for jugador in jugadores:
+		# Ahora esta función SÍ existe en jugador.gd
 		if jugador.tiene_objeto_ilegal():
 			print("¡JEFE PILLÓ AL JUGADOR ", jugador.name, "!")
 			_despedir_jugador.rpc(jugador.name)
 
 @rpc("authority", "call_local")
 func _game_over_global():
+	estado_actual = Estado.FIN_PARTIDA
 	print("--- DESPIDO MASIVO: TODOS A LA CALLE ---")
-	# Lógica de fin de partida
 
 @rpc("authority", "call_local")
 func _despedir_jugador(nombre):
 	print("--- JUGADOR ", nombre, " DESPEDIDO ---")
-	# Aquí mataríamos al jugador
