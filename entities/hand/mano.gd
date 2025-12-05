@@ -4,14 +4,16 @@ extends Node3D
 @export var es_mano_izquierda: bool = false
 @export var velocidad_movimiento_visual: float = 20.0
 @export var fuerza_agarre: float = 200.0
-@export var fuerza_lanzamiento: float = 6.0
+@export var fuerza_lanzamiento: float = 6.0 
 @export var offset_reposo_cuerpo: Vector3 = Vector3(0.4, 1.0, -0.6) 
 @export var debug_visual: bool = false
 
+# --- REFERENCIAS ---
 @onready var mesh: MeshInstance3D = $MeshMano
 @onready var pos_accion: Marker3D = $PosicionAccion
 @onready var jugador_padre = get_parent().get_parent()
 
+# --- ESTADO ---
 var _objeto_agarrado: RigidBody3D = null
 var _esta_pulsando: bool = false
 var _tiempo_pulsado: float = 0.0
@@ -57,41 +59,70 @@ func _enviar_datos_al_servidor():
 	var rotacion_destino = Quaternion(pos_accion.global_transform.basis.orthonormalized())
 	_objeto_agarrado.rpc("actualizar_objetivo_agarre", posicion_destino_caja, rotacion_destino, multiplayer.get_unique_id())
 
+# --- FUNCIÓN CORREGIDA Y BLINDADA ---
 func _actualizar_visuales(delta):
 	var destino: Vector3
+	var rotacion_destino: Vector3
 	var velocidad_actual = velocidad_movimiento_visual
 	
 	if _objeto_agarrado and is_instance_valid(_objeto_agarrado):
+		# Destino real
 		destino = _objeto_agarrado.to_global(_punto_agarre_local)
-		if mesh.global_position.distance_to(destino) > 0.05:
+		
+		# --- CORRECCIÓN 1: ERROR COLINEAR (LookAt) ---
+		var direccion_obj = (destino - mesh.global_position).normalized()
+		var producto_punto = abs(direccion_obj.dot(Vector3.UP))
+		
+		# Solo miramos si NO es colinear (Producto punto < 0.99) y hay distancia
+		if mesh.global_position.distance_to(destino) > 0.05 and producto_punto < 0.99:
 			mesh.look_at(destino, Vector3.UP)
+		# --------------------------------------------
+		
 		velocidad_actual = 30.0 
+		
 	elif _modo_manosear:
 		destino = pos_accion.global_position
+		rotacion_destino = pos_accion.global_rotation
 	else:
 		if jugador_padre:
 			var offset = offset_reposo_cuerpo
 			if es_mano_izquierda: offset.x = -abs(offset.x)
 			else: offset.x = abs(offset.x)
 			destino = jugador_padre.to_global(offset)
+			rotacion_destino = jugador_padre.global_rotation
 			if _esfera_debug: _esfera_debug.global_position = destino
 		else:
 			destino = global_position
+			rotacion_destino = global_rotation
 
-	mesh.global_position = mesh.global_position.lerp(destino, delta * velocidad_actual)
+	# --- CORRECCIÓN 2: GLITCH VISUAL HOST ---
+	# Si el destino está a más de 2 metros (ej: viene del Limbo -500), TELETRANSPORTE
+	if mesh.global_position.distance_to(destino) > 2.0:
+		mesh.global_position = destino # Snap instantáneo
+	else:
+		mesh.global_position = mesh.global_position.lerp(destino, delta * velocidad_actual)
+	# ----------------------------------------
+
 	if not _objeto_agarrado:
-		var rot_obj = pos_accion.global_rotation if _modo_manosear else (jugador_padre.global_rotation if jugador_padre else Vector3.ZERO)
-		mesh.global_rotation.x = lerp_angle(mesh.global_rotation.x, rot_obj.x, delta * 15)
-		mesh.global_rotation.y = lerp_angle(mesh.global_rotation.y, rot_obj.y, delta * 15)
-		mesh.global_rotation.z = lerp_angle(mesh.global_rotation.z, rot_obj.z, delta * 15)
+		mesh.global_rotation.x = lerp_angle(mesh.global_rotation.x, rotacion_destino.x, delta * 15)
+		mesh.global_rotation.y = lerp_angle(mesh.global_rotation.y, rotacion_destino.y, delta * 15)
+		mesh.global_rotation.z = lerp_angle(mesh.global_rotation.z, rotacion_destino.z, delta * 15)
 
-# --- FUNCIÓN NUEVA PARA EVITAR EL EFECTO GOMA ---
-func forzar_teletransporte_visual(posicion: Vector3):
-	mesh.global_position = posicion
-	# Si tenemos objeto, lo movemos visualmente también
-	if _objeto_agarrado and is_instance_valid(_objeto_agarrado):
-		_objeto_agarrado.global_position = posicion
-# ------------------------------------------------
+func forzar_agarre_inmediato(cuerpo: RigidBody3D, punto_impacto: Vector3):
+	_objeto_agarrado = cuerpo
+	_punto_agarre_local = cuerpo.to_local(punto_impacto)
+	_tiempo_desde_agarre = 0.0
+	
+	if _objeto_agarrado:
+		_objeto_agarrado.visible = true
+		# Forzamos posición del objeto para evitar parpadeo
+		_objeto_agarrado.global_position = punto_impacto
+		
+	if jugador_padre is RigidBody3D: 
+		jugador_padre.add_collision_exception_with(cuerpo)
+	
+	# Teletransporte visual de la mano también
+	mesh.global_position = punto_impacto
 
 func gestionar_input(just_pressed: bool, is_pressed: bool, info_raycast: Dictionary) -> void:
 	_esta_pulsando = is_pressed

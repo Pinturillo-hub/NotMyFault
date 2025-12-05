@@ -1,6 +1,6 @@
 extends RigidBody3D
 
-# ... (TUS VARIABLES Y CONFIGURACIÓN IGUAL) ...
+# --- CONFIGURACIÓN ---
 @export_group("Físicas")
 @export var velocidad_maxima: float = 6.0
 @export var aceleracion_tierra: float = 20.0
@@ -12,6 +12,7 @@ extends RigidBody3D
 @export_group("Juego")
 @export var tiempo_para_cambiazo: float = 2.0 
 
+# --- REFERENCIAS ---
 @onready var cabeza: Node3D = $Cabeza
 @onready var raycast: RayCast3D = $Cabeza/RayCast3D
 @onready var mano_der: Node3D = $Cabeza/ManoDerecha
@@ -23,10 +24,14 @@ extends RigidBody3D
 @onready var bulto_visual: MeshInstance3D = $ModeloCocodrilo/Armature/Skeleton3D/BolsilloAttachment/BultoVisual
 
 var barra_carga: ProgressBar = null
+
+# --- VARIABLES ---
 var _rotacion_objetivo_y: float = 0.0
 var _direccion_input: Vector3 = Vector3.ZERO
 var _altura_base_visuales: float = 0.0
 var _objeto_en_bolsillo: RigidBody3D = null
+
+# --- ESTADO CAMBIAZO ---
 var _timer_cambiazo: float = 0.0
 var _victima_cambiazo: Node3D = null
 var _mano_activa_cambiazo: Node3D = null 
@@ -91,6 +96,9 @@ func _procesar_input_mano(event, accion, mano, mirando_abajo, info):
 		if released or (held and (not info["cuerpo"] or not info["cuerpo"].is_in_group("jugadores"))):
 			_cancelar_cambiazo()
 		
+		if held and not mano._objeto_agarrado and _victima_cambiazo:
+			_cancelar_cambiazo()
+		
 		if _victima_cambiazo == null:
 			if just:
 				if info["cuerpo"] is RigidBody3D:
@@ -106,60 +114,10 @@ func _process(delta: float) -> void:
 	if not is_multiplayer_authority(): return
 	var input = Input.get_vector("izquierda", "derecha", "adelante", "atras")
 	_direccion_input = Vector3(input.x, 0, input.y).normalized()
+	
 	_actualizar_cruceta()
 	_procesar_progreso_cambiazo(delta)
 	_animar_visuales(delta)
-
-# --- SERVIDOR PROCESAR CAMBIAZO (MEJORADO) ---
-@rpc("any_peer", "call_local", "reliable")
-func servidor_procesar_cambiazo(ruta_obj_entrante: NodePath, id_victima: int, nombre_mano_ladron: String, posicion_robo: Vector3):
-	if not multiplayer.is_server(): return
-	
-	var obj_entrante = get_node_or_null(ruta_obj_entrante)
-	var nodo_victima = _buscar_jugador_por_id(id_victima)
-	var id_ladron = multiplayer.get_remote_sender_id()
-	
-	if not nodo_victima: return
-	
-	# 1. Sacamos lo que tiene la víctima
-	var obj_saliente = nodo_victima._objeto_en_bolsillo
-	
-	# 2. Si hay objeto saliente, lo sacamos y preparamos para dárselo al ladrón
-	if obj_saliente:
-		nodo_victima.rpc("asignar_objeto_bolsillo_remoto", NodePath("")) 
-		obj_saliente.rpc("salir_de_bolsillo", posicion_robo) # Lo mandamos a la mano del ladrón
-		
-		var nodo_ladron = _buscar_jugador_por_id(id_ladron)
-		if nodo_ladron:
-			nodo_ladron.rpc("cliente_recibir_objeto_en_mano", obj_saliente.get_path(), nombre_mano_ladron)
-	
-	# 3. Metemos el objeto entrante (si hay) en el bolsillo de la víctima
-	if obj_entrante:
-		obj_entrante.rpc("entrar_en_bolsillo", id_victima)
-		nodo_victima.rpc("asignar_objeto_bolsillo_remoto", obj_entrante.get_path())
-
-# --- CLIENTE RECIBIR (SIN EFECTO GOMA) ---
-@rpc("any_peer", "call_local", "reliable")
-func cliente_recibir_objeto_en_mano(ruta_objeto: NodePath, nombre_mano: String):
-	var objeto = get_node_or_null(ruta_objeto)
-	# Buscamos en la cabeza
-	var mano = cabeza.get_node_or_null(nombre_mano)
-	
-	if objeto and mano:
-		# 1. Teletransporte visual crítico
-		objeto.global_position = mano.pos_accion.global_position
-		
-		# 2. FORZAR AGARRE
-		# Usamos la función pública de la mano
-		mano.intentar_agarrar(objeto, mano.pos_accion.global_position)
-		
-		print("CLIENTE: Objeto recibido y agarrado: ", objeto.name)
-# ... (RESTO DEL SCRIPT IGUAL QUE ANTES: funciones de bolsillo, físicas, helpers) ...
-# ...
-# COPIA Y PEGA AQUÍ TODO EL RESTO DEL SCRIPT ANTERIOR A PARTIR DE "func _es_espalda_valida" ...
-# ...
-# (Recuerda incluir _gestionar_bolsillo_mano_especifica, _meter, _sacar, _integrate_forces, etc.)
-# ...
 
 func _es_espalda_valida(victima_node: Node3D) -> bool:
 	var mi_frente = -global_transform.basis.z
@@ -202,16 +160,52 @@ func _ejecutar_intercambio_final():
 	
 	rpc_id(1, "servidor_procesar_cambiazo", ruta_mi_objeto, id_victima, _mano_activa_cambiazo.name, posicion_recepcion)
 
+@rpc("any_peer", "call_local", "reliable")
+func servidor_procesar_cambiazo(ruta_obj_entrante: NodePath, id_victima: int, nombre_mano_ladron: String, posicion_robo: Vector3):
+	if not multiplayer.is_server(): return
+	
+	var obj_entrante = get_node_or_null(ruta_obj_entrante)
+	var nodo_victima = _buscar_jugador_por_id(id_victima)
+	var id_ladron = multiplayer.get_remote_sender_id()
+	
+	if not nodo_victima: return
+	
+	var obj_saliente = nodo_victima._objeto_en_bolsillo
+	
+	if obj_saliente:
+		nodo_victima.rpc("asignar_objeto_bolsillo_remoto", NodePath("")) 
+		obj_saliente.rpc("salir_de_bolsillo", posicion_robo)
+		
+		var nodo_ladron = _buscar_jugador_por_id(id_ladron)
+		if nodo_ladron:
+			nodo_ladron.rpc("cliente_recibir_objeto_en_mano", obj_saliente.get_path(), nombre_mano_ladron)
+	
+	if obj_entrante:
+		obj_entrante.rpc("entrar_en_bolsillo", id_victima)
+		nodo_victima.rpc("asignar_objeto_bolsillo_remoto", obj_entrante.get_path())
 
-@rpc("any_peer", "call_local", "reliable") 
+@rpc("any_peer", "call_local", "reliable")
 func asignar_objeto_bolsillo_remoto(ruta: NodePath):
 	if ruta.is_empty():
 		_objeto_en_bolsillo = null
-		# Importante: Llamamos al RPC del bulto para que todos lo vean
 		rpc("_actualizar_bulto_visual", false)
 	else:
 		_objeto_en_bolsillo = get_node(ruta)
 		rpc("_actualizar_bulto_visual", true)
+
+@rpc("any_peer", "call_local", "reliable")
+func cliente_recibir_objeto_en_mano(ruta_objeto: NodePath, nombre_mano: String):
+	var objeto = get_node_or_null(ruta_objeto)
+	var mano = cabeza.get_node_or_null(nombre_mano)
+	
+	if objeto and mano:
+		# FORZAR ESTADO VISIBLE LOCALMENTE
+		objeto.global_position = mano.pos_accion.global_position
+		objeto.visible = true 
+		
+		# Agarrar
+		mano.forzar_agarre_inmediato(objeto, mano.pos_accion.global_position)
+		print("Objeto recibido: ", objeto.name)
 
 @rpc("any_peer", "call_remote")
 func recibir_cambiazo(_ruta: NodePath):
@@ -225,11 +219,17 @@ func _gestionar_bolsillo_mano_especifica(mano_solicitante: Node3D):
 			_sacar_objeto_de_bolsillo(true, mano_solicitante)
 		_meter_objeto_en_bolsillo(objeto)
 		return
+
 	if _objeto_en_bolsillo:
 		_sacar_objeto_de_bolsillo(true, mano_solicitante)
 
 func _meter_objeto_en_bolsillo(objeto: RigidBody3D):
 	_objeto_en_bolsillo = objeto
+	
+	# --- SEGURIDAD ANTI-EXPLOSIÓN ---
+	add_collision_exception_with(objeto)
+	# --------------------------------
+	
 	if objeto.has_method("entrar_en_bolsillo"):
 		objeto.rpc("entrar_en_bolsillo", name.to_int())
 	rpc("_actualizar_bulto_visual", true)
@@ -240,6 +240,8 @@ func _sacar_objeto_de_bolsillo(equipar: bool, mano_destino: Node3D = null):
 	_objeto_en_bolsillo = null
 	
 	var mano_final = mano_destino if mano_destino else mano_der
+	
+	# Si equipamos, vamos directos a la mano. Si no, a la espalda.
 	var pos_salida = mano_final.pos_accion.global_position if equipar else bolsillo_attach.global_position + (global_transform.basis.z * 0.5)
 	
 	if objeto.has_method("salir_de_bolsillo"):
@@ -248,11 +250,13 @@ func _sacar_objeto_de_bolsillo(equipar: bool, mano_destino: Node3D = null):
 	rpc("_actualizar_bulto_visual", false)
 	
 	if equipar:
-		objeto.global_position = pos_salida 
-		await get_tree().create_timer(0.05).timeout
+		# --- CORRECCIÓN: Usar la función de agarre forzoso de la mano ---
+		# Esto asegura que visualmente esté pegado desde el frame 0
 		if is_instance_valid(objeto):
-			mano_final.intentar_agarrar(objeto, pos_salida)
-
+			objeto.global_position = pos_salida # Teletransporte objeto
+			mano_final.forzar_agarre_inmediato(objeto, pos_salida) # Teletransporte mano
+		
+		# ----------------------------------------------------------------
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	if not is_multiplayer_authority(): return
 	var nueva_rotacion := Basis(Vector3.UP, _rotacion_objetivo_y)
@@ -337,8 +341,7 @@ func _animar_visuales(delta):
 
 @rpc("any_peer", "call_local")
 func _actualizar_bulto_visual(visible_bulto):
-	if bulto_visual: 
-		bulto_visual.visible = visible_bulto
+	if bulto_visual: bulto_visual.visible = visible_bulto
 
 func _buscar_jugador_por_id(id: int) -> Node:
 	var ruta = "/root/Mundo/Jugadores"
