@@ -30,6 +30,7 @@ collision_layer = 2
 axis_lock_angular_x = true
 axis_lock_angular_z = true
 physics_material_override = SubResource("PhysicsMaterial_43k7d")
+linear_damp = 5.0
 script = ExtResource("1_f7wae")
 
 [node name="ModeloCocodrilo" parent="." instance=ExtResource("2_ml0ux")]
@@ -59,6 +60,7 @@ cull_mask = 1048573
 
 [node name="RayCast3D" type="RayCast3D" parent="Cabeza"]
 target_position = Vector3(0, 0, -3)
+collision_mask = 3
 
 [node name="ManoIzquierda" parent="Cabeza" instance=ExtResource("2_rfplf")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.413, 0.2)

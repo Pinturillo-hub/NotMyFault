@@ -4,16 +4,14 @@ extends Node3D
 @export var es_mano_izquierda: bool = false
 @export var velocidad_movimiento_visual: float = 20.0
 @export var fuerza_agarre: float = 200.0
-@export var fuerza_lanzamiento: float = 15.0
+@export var fuerza_lanzamiento: float = 6.0
 @export var offset_reposo_cuerpo: Vector3 = Vector3(0.4, 1.0, -0.6) 
 @export var debug_visual: bool = false
 
-# --- REFERENCIAS ---
 @onready var mesh: MeshInstance3D = $MeshMano
 @onready var pos_accion: Marker3D = $PosicionAccion
 @onready var jugador_padre = get_parent().get_parent()
 
-# --- ESTADO ---
 var _objeto_agarrado: RigidBody3D = null
 var _esta_pulsando: bool = false
 var _tiempo_pulsado: float = 0.0
@@ -21,6 +19,7 @@ var _punto_agarre_local: Vector3 = Vector3.ZERO
 var _modo_manosear: bool = false
 var _ignorar_input_soltar: bool = false 
 var _en_disputa_activa: bool = false
+var _tiempo_desde_agarre: float = 0.0
 var _esfera_debug: MeshInstance3D = null
 
 func _ready() -> void:
@@ -30,18 +29,15 @@ func _physics_process(delta: float) -> void:
 	if _esta_pulsando: _tiempo_pulsado += delta
 	else: _tiempo_pulsado = 0.0
 
-	# --- CORRECCIÓN 1: LÓGICA DE AUTO-SOLTAR MÁS PERMISIVA ---
+	# AUTO-SOLTAR
 	if _objeto_agarrado and is_instance_valid(_objeto_agarrado):
-		var id_servidor = _objeto_agarrado.get("id_sostenedor_1")
-		var mi_id = multiplayer.get_unique_id()
-		
-		# Solo soltamos si el servidor dice explícitamente que lo tiene OTRO (no 0, no yo)
-		# Si es 0, asumimos que el RPC de agarre está en camino y lo mantenemos visualmente.
-		if id_servidor != 0 and id_servidor != mi_id and not _en_disputa_activa:
-			_limpiar_estado()
-			return
-	# ---------------------------------------------------------
+		_tiempo_desde_agarre += delta
+		if _tiempo_desde_agarre > 0.5: 
+			if _objeto_agarrado.get("id_sostenedor_1") != multiplayer.get_unique_id() and not _en_disputa_activa:
+				_limpiar_estado()
+				return
 
+	# LÓGICA AGARRE
 	if _objeto_agarrado and is_instance_valid(_objeto_agarrado):
 		_enviar_datos_al_servidor()
 		if is_multiplayer_authority():
@@ -63,64 +59,66 @@ func _enviar_datos_al_servidor():
 
 func _actualizar_visuales(delta):
 	var destino: Vector3
-	var rotacion_destino: Vector3
 	var velocidad_actual = velocidad_movimiento_visual
 	
 	if _objeto_agarrado and is_instance_valid(_objeto_agarrado):
 		destino = _objeto_agarrado.to_global(_punto_agarre_local)
-		
-		if mesh.global_position.distance_to(_objeto_agarrado.global_position) > 0.05:
-			mesh.look_at(_objeto_agarrado.global_position, Vector3.UP)
-		# ------------------------------------------
-		
+		if mesh.global_position.distance_to(destino) > 0.05:
+			mesh.look_at(destino, Vector3.UP)
 		velocidad_actual = 30.0 
 	elif _modo_manosear:
 		destino = pos_accion.global_position
-		rotacion_destino = pos_accion.global_rotation
 	else:
 		if jugador_padre:
 			var offset = offset_reposo_cuerpo
 			if es_mano_izquierda: offset.x = -abs(offset.x)
 			else: offset.x = abs(offset.x)
 			destino = jugador_padre.to_global(offset)
-			rotacion_destino = jugador_padre.global_rotation
 			if _esfera_debug: _esfera_debug.global_position = destino
 		else:
 			destino = global_position
-			rotacion_destino = global_rotation
 
 	mesh.global_position = mesh.global_position.lerp(destino, delta * velocidad_actual)
-	
 	if not _objeto_agarrado:
-		mesh.global_rotation.x = lerp_angle(mesh.global_rotation.x, rotacion_destino.x, delta * 15)
-		mesh.global_rotation.y = lerp_angle(mesh.global_rotation.y, rotacion_destino.y, delta * 15)
-		mesh.global_rotation.z = lerp_angle(mesh.global_rotation.z, rotacion_destino.z, delta * 15)
+		var rot_obj = pos_accion.global_rotation if _modo_manosear else (jugador_padre.global_rotation if jugador_padre else Vector3.ZERO)
+		mesh.global_rotation.x = lerp_angle(mesh.global_rotation.x, rot_obj.x, delta * 15)
+		mesh.global_rotation.y = lerp_angle(mesh.global_rotation.y, rot_obj.y, delta * 15)
+		mesh.global_rotation.z = lerp_angle(mesh.global_rotation.z, rot_obj.z, delta * 15)
 
-# --- INPUT (Sin cambios) ---
+# --- FUNCIÓN NUEVA PARA EVITAR EL EFECTO GOMA ---
+func forzar_teletransporte_visual(posicion: Vector3):
+	mesh.global_position = posicion
+	# Si tenemos objeto, lo movemos visualmente también
+	if _objeto_agarrado and is_instance_valid(_objeto_agarrado):
+		_objeto_agarrado.global_position = posicion
+# ------------------------------------------------
+
 func gestionar_input(just_pressed: bool, is_pressed: bool, info_raycast: Dictionary) -> void:
 	_esta_pulsando = is_pressed
 	if just_pressed:
 		_tiempo_pulsado = 0.0 
 		if _objeto_agarrado:
-			_soltar(true) 
+			_soltar(true)
 			_ignorar_input_soltar = true
 		elif info_raycast["cuerpo"] and info_raycast["cuerpo"].has_method("interactuar"):
 			info_raycast["cuerpo"].interactuar()
 			_modo_manosear = true
 			_ignorar_input_soltar = true
 		elif info_raycast["cuerpo"] is RigidBody3D:
-			_intentar_agarrar(info_raycast["cuerpo"], info_raycast["punto"])
+			intentar_agarrar(info_raycast["cuerpo"], info_raycast["punto"])
 			_ignorar_input_soltar = false 
+	
 	if is_pressed:
 		if not _objeto_agarrado and not _ignorar_input_soltar: _modo_manosear = true
 	else:
 		_modo_manosear = false
+
 	if not is_pressed and not just_pressed:
 		if _objeto_agarrado and not _ignorar_input_soltar:
 			if _tiempo_pulsado > 0.25: _soltar(false) 
 		_ignorar_input_soltar = false
 
-func _intentar_agarrar(cuerpo: RigidBody3D, punto_impacto: Vector3):
+func intentar_agarrar(cuerpo: RigidBody3D, punto_impacto: Vector3):
 	if cuerpo.has_method("intentar_coger"):
 		if not cuerpo.disputa_iniciada.is_connected(_on_disputa_iniciada):
 			cuerpo.disputa_iniciada.connect(_on_disputa_iniciada.bind(cuerpo))
@@ -129,6 +127,7 @@ func _intentar_agarrar(cuerpo: RigidBody3D, punto_impacto: Vector3):
 		cuerpo.rpc("intentar_coger", multiplayer.get_unique_id())
 		_objeto_agarrado = cuerpo
 		_punto_agarre_local = cuerpo.to_local(punto_impacto)
+		_tiempo_desde_agarre = 0.0
 		if jugador_padre is RigidBody3D: jugador_padre.add_collision_exception_with(cuerpo)
 
 func _soltar(lanzar: bool):
@@ -160,5 +159,4 @@ func _on_disputa_finalizada(ganador_id):
 		_limpiar_estado()
 
 func _crear_debug():
-	# (Tu código de debug igual)
 	pass
