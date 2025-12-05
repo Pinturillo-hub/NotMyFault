@@ -6,7 +6,7 @@ const RIGIDEZ_MUELLE: float = 150.0
 const AMORTIGUACION: float = 10.0
 const RIGIDEZ_ANGULAR: float = 10.0
 const AMORTIGUACION_ANGULAR: float = 2.0
-const LIMBO_POS: Vector3 = Vector3(0, -500, 0)
+const LIMBO_POS: Vector3 = Vector3(0, -200, 0) 
 
 # --- ESTADO SINCRONIZADO ---
 @export_group("Estado Multiplayer")
@@ -28,37 +28,51 @@ var _tiempo_desde_ultima_orden: float = 0.0
 var _hay_orden_nueva: bool = false
 var _fuerza_tiro_1: float = 0.0
 var _fuerza_tiro_2: float = 0.0
+var _frame_teletransporte: int = 0 # Para saltar físicas un frame
 
 signal disputa_iniciada
 signal disputa_finalizada(ganador_id)
 
 func _ready() -> void:
-	can_sleep = false
+	can_sleep = false 
 	add_to_group("agarrables")
 	if es_ilegal: add_to_group("ilegal")
 	_actualizar_silueta(false)
 
-func _physics_process(_delta: float) -> void:
-	# Si está en bolsillo, forzamos limbo visualmente para evitar frames sueltos
-	if en_bolsillo_de_id != 0:
-		if global_position.y > -400.0: global_position = LIMBO_POS
-		if visible: visible = false
+# --- WATCHDOG (FIX INTERACCIÓN) ---
+func _process(_delta):
+	# Este bloque asegura que si el objeto cree que está libre, 
+	# realmente tenga las colisiones activas. 
+	# Soluciona la pérdida de paquetes RPC.
+	if en_bolsillo_de_id == 0 and id_sostenedor_1 == 0 and id_sostenedor_2 == 0:
+		if collision_layer == 0:
+			_configurar_fisicas_libre()
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
-	if not multiplayer.has_multiplayer_peer() or not multiplayer.is_server(): return
-
+	# 1. MODO BOLSILLO (Autoridad Absoluta)
 	if en_bolsillo_de_id != 0:
+		state.transform.origin = LIMBO_POS
 		state.linear_velocity = Vector3.ZERO
 		state.angular_velocity = Vector3.ZERO
-		state.transform.origin = LIMBO_POS # Forzar en física también
 		return
+
+	# 2. MODO TELETRANSPORTE (Pop Instantáneo)
+	if _frame_teletransporte > 0:
+		state.transform.origin = _objetivo_posicion
+		state.linear_velocity = Vector3.ZERO
+		state.angular_velocity = Vector3.ZERO
+		_frame_teletransporte -= 1
+		return
+
+	if not multiplayer.has_multiplayer_peer() or not multiplayer.is_server(): return
 
 	_tiempo_desde_ultima_orden += state.step
 	
-	# Autorreparación si nadie lo tiene
+	# Autorreparación Server-Side
 	if id_sostenedor_1 == 0 and id_sostenedor_2 == 0 and collision_layer == 0:
 		_configurar_fisicas_libre()
 
+	# Fuerzas de muelle
 	if (id_sostenedor_1 != 0 or id_sostenedor_2 != 0) and _tiempo_desde_ultima_orden < 0.5:
 		if _hay_orden_nueva:
 			_aplicar_fuerzas_agarre(state)
@@ -81,27 +95,34 @@ func _aplicar_fuerzas_agarre(state: PhysicsDirectBodyState3D) -> void:
 	state.apply_torque(torque_global)
 	_hay_orden_nueva = false
 
-# --- GESTIÓN DE ESTADO (SERVER SIDE) ---
+# --- TELETRANSPORTES Y LOGICA ---
 
 func ejecutar_robo_desde_servidor(nuevo_dueno_id: int, pos_salida: Vector3) -> void:
-	# 1. Sacar del bolsillo lógicamente
 	en_bolsillo_de_id = 0
-	
-	# 2. Teletransporte Físico DURO (Resetear física)
-	var xform = Transform3D(global_transform.basis, pos_salida)
-	PhysicsServer3D.body_set_state(get_rid(), PhysicsServer3D.BODY_STATE_TRANSFORM, xform)
-	linear_velocity = Vector3.ZERO
-	angular_velocity = Vector3.ZERO
-	
-	# 3. Asignar dueño
+	_forzar_teletransporte(pos_salida)
 	_asignar_dueno(nuevo_dueno_id)
-	
-	# 4. Establecer objetivos iniciales para que el muelle no de tirones
 	_objetivo_posicion = pos_salida
 	_objetivo_rotacion = Quaternion(global_transform.basis.orthonormalized())
-	
-	# 5. Notificar visualmente
 	rpc("notificar_salida_bolsillo_robo", pos_salida)
+
+@rpc("call_local")
+func notificar_salida_bolsillo_robo(posicion: Vector3) -> void:
+	en_bolsillo_de_id = 0
+	_forzar_teletransporte(posicion)
+	visible = true
+	# Asegura que el cliente local actualice su física interna
+	if has_method("reset_physics_interpolation"): reset_physics_interpolation()
+
+func _forzar_teletransporte(pos: Vector3):
+	global_position = pos
+	_objetivo_posicion = pos
+	_frame_teletransporte = 2 # Saltamos física 2 frames para asentar la posición
+	
+	# Hard Reset
+	var xform = Transform3D(global_transform.basis, pos)
+	PhysicsServer3D.body_set_state(get_rid(), PhysicsServer3D.BODY_STATE_TRANSFORM, xform)
+	PhysicsServer3D.body_set_state(get_rid(), PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, Vector3.ZERO)
+	PhysicsServer3D.body_set_state(get_rid(), PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, Vector3.ZERO)
 
 func _asignar_dueno(nuevo_id: int) -> void:
 	_gestionar_excepciones_colision(id_sostenedor_1, false)
@@ -110,22 +131,36 @@ func _asignar_dueno(nuevo_id: int) -> void:
 	en_disputa = false
 	agarre_fuerte = false
 	en_bolsillo_de_id = 0
-	
 	_configurar_fisicas_agarrado()
-	
-	if nuevo_id != 0:
-		_gestionar_excepciones_colision(nuevo_id, true)
-	
+	if nuevo_id != 0: _gestionar_excepciones_colision(nuevo_id, true)
 	_notificar_estado.rpc(id_sostenedor_1, 0, false)
 
-# --- CORRECCIÓN DEL ERROR DE CAPAS Y FREEZE ---
+# --- RPCs ---
+
+@rpc("any_peer", "call_local")
+func salir_de_bolsillo(posicion_salida: Vector3) -> void:
+	en_bolsillo_de_id = 0
+	_forzar_teletransporte(posicion_salida)
+	if has_method("reset_physics_interpolation"): reset_physics_interpolation()
+	_configurar_fisicas_libre()
+
+@rpc("any_peer", "call_local")
+func entrar_en_bolsillo(id_dueno: int) -> void:
+	en_bolsillo_de_id = id_dueno
+	id_sostenedor_1 = 0
+	id_sostenedor_2 = 0
+	en_disputa = false
+	_configurar_fisicas_bolsillo()
+
+# --- CONFIG ESTADOS FÍSICOS (Con set_deferred para evitar bloqueos) ---
+
 func _configurar_fisicas_libre() -> void:
-	# Usamos set_deferred correctamente sobre la propiedad, no call_deferred sobre un método inexistente
+	visible = true
 	set_deferred("freeze", false)
+	set_deferred("sleeping", false) # Despertar si estaba dormido
 	set_deferred("collision_layer", 1)
 	set_deferred("collision_mask", 1)
 	gravity_scale = 1.0
-	visible = true
 
 func _configurar_fisicas_agarrado() -> void:
 	set_deferred("collision_layer", 1)
@@ -133,10 +168,10 @@ func _configurar_fisicas_agarrado() -> void:
 	gravity_scale = 0.0
 	visible = true
 	set_deferred("freeze", false)
+	set_deferred("sleeping", false)
 
 func _configurar_fisicas_bolsillo() -> void:
 	set_deferred("freeze", true)
-	# IMPORTANTE: Freeze mode kinematic permite moverlo con código sin que la física se queje
 	freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
 	set_deferred("collision_layer", 0)
 	set_deferred("collision_mask", 0)
@@ -144,9 +179,10 @@ func _configurar_fisicas_bolsillo() -> void:
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
 	global_position = LIMBO_POS
+	if has_method("reset_physics_interpolation"): reset_physics_interpolation()
 	visible = false
 
-# --- RPCs ---
+# --- INTERACCIÓN ---
 
 @rpc("any_peer", "call_local", "unreliable_ordered")
 func actualizar_objetivo_agarre(posicion: Vector3, rotacion: Quaternion, id_jugador: int) -> void:
@@ -161,15 +197,11 @@ func actualizar_objetivo_agarre(posicion: Vector3, rotacion: Quaternion, id_juga
 func intentar_coger(solicitante_id: int) -> void:
 	if not multiplayer.is_server(): return
 	
-	# Lógica especial: Si el dueño del bolsillo quiere su propio objeto
 	if en_bolsillo_de_id == solicitante_id:
 		en_bolsillo_de_id = 0
-		# Al sacarlo uno mismo, lo ponemos libre un instante antes de agarrarlo
-		# para limpiar estados
 		_configurar_fisicas_libre()
 
-	if en_bolsillo_de_id != 0 and en_bolsillo_de_id != solicitante_id: 
-		return # No se puede coger del bolsillo ajeno con click normal (requiere mecánica de robo)
+	if en_bolsillo_de_id != 0 and en_bolsillo_de_id != solicitante_id: return
 
 	if id_sostenedor_1 == 0:
 		_asignar_dueno(solicitante_id)
@@ -194,28 +226,6 @@ func intentar_soltar(solicitante_id: int, impulso: Vector3) -> void:
 		en_disputa = false
 	
 	_notificar_estado.rpc(id_sostenedor_1, id_sostenedor_2, en_disputa)
-
-@rpc("any_peer", "call_local")
-func entrar_en_bolsillo(id_dueno: int) -> void:
-	id_sostenedor_1 = 0
-	id_sostenedor_2 = 0
-	en_disputa = false
-	en_bolsillo_de_id = id_dueno
-	_configurar_fisicas_bolsillo()
-
-@rpc("any_peer", "call_local")
-func salir_de_bolsillo(posicion_salida: Vector3) -> void:
-	en_bolsillo_de_id = 0
-	# Pop visual instantáneo
-	global_position = posicion_salida
-	PhysicsServer3D.body_set_state(get_rid(), PhysicsServer3D.BODY_STATE_TRANSFORM, Transform3D(Basis(), posicion_salida))
-	_configurar_fisicas_libre()
-
-@rpc("call_local")
-func notificar_salida_bolsillo_robo(posicion: Vector3) -> void:
-	if not multiplayer.is_server():
-		global_position = posicion
-		visible = true
 
 @rpc("authority", "call_local", "reliable")
 func _notificar_estado(id1: int, id2: int, disputando: bool) -> void:

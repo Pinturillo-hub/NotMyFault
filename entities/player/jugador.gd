@@ -159,12 +159,22 @@ func _sacar_objeto_de_bolsillo(equipar: bool, mano_destino: Node3D) -> void:
 	var objeto = _objeto_en_bolsillo
 	_objeto_en_bolsillo = null
 	
-	# Usamos posición global de la mano para que el objeto aparezca ahí directamente
 	var pos_salida = mano_destino.pos_accion.global_position if equipar else bolsillo_attach.global_position
 	
 	if equipar:
+		# --- PREDICCIÓN DE CLIENTE (POPPING INSTANTÁNEO) ---
+		# 1. Teletransportamos visualmente YA
 		objeto.global_position = pos_salida
+		if objeto.has_method("reset_physics_interpolation"):
+			objeto.reset_physics_interpolation()
+		
+		# 2. Hacemos visible YA (sin esperar al server)
+		objeto.visible = true 
+		
+		# 3. Forzamos el agarre local
 		mano_destino.forzar_agarre_inmediato(objeto, pos_salida)
+		
+		# 4. Enviamos la petición al server
 		objeto.rpc("intentar_coger", multiplayer.get_unique_id())
 	else:
 		objeto.rpc("salir_de_bolsillo", pos_salida)
