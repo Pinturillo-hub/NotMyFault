@@ -25,7 +25,7 @@ properties/3/path = NodePath("Cabeza:rotation")
 properties/3/spawn = true
 properties/3/replication_mode = 1
 
-[node name="Jugador" type="RigidBody3D"]
+[node name="Jugador" type="RigidBody3D" groups=["jugadores"]]
 collision_layer = 2
 axis_lock_angular_x = true
 axis_lock_angular_z = true
@@ -88,7 +88,7 @@ size_flags_horizontal = 4
 size_flags_vertical = 4
 
 [node name="Cruceta" type="ColorRect" parent="Interfaz/Centro"]
-custom_minimum_size = Vector2(4, 4)
+custom_minimum_size = Vector2(8, 8)
 layout_mode = 2
 
 [node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="."]

@@ -1,0 +1,28 @@
+[gd_scene load_steps=5 format=3 uid="uid://c3fev03j5h626"]
+
+[ext_resource type="Script" uid="uid://cdw0h5d4ailqo" path="res://objects/interactables/maquina_fichar.gd" id="1_sl8v1"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_sl8v1"]
+size = Vector3(1, 1, 0.4)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_47c13"]
+albedo_color = Color(0.42871994, 0.5775199, 0.44200245, 1)
+rim_tint = 0.07
+stencil_flags = 2
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_001sy"]
+size = Vector3(1, 1, 0.4)
+
+[node name="MaquinaFichar" type="StaticBody3D"]
+script = ExtResource("1_sl8v1")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_sl8v1")
+surface_material_override/0 = SubResource("StandardMaterial3D_47c13")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_001sy")
+
+[node name="Label3D" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6374819, 0)
+text = "Fichar"

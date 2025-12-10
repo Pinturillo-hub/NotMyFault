@@ -1,6 +1,6 @@
 [gd_resource type="ShaderMaterial" load_steps=3 format=3 uid="uid://wkfphmsomar5"]
 
-[ext_resource type="Shader" uid="uid://c2ebus1k8dndq" path="res://assets/materials/plastilina.gdshader.gdshader" id="1_wqrga"]
+[ext_resource type="Shader" uid="uid://c2ebus1k8dndq" path="res://assets/materials/shaders/plastilina.gdshader.gdshader" id="1_wqrga"]
 [ext_resource type="Texture2D" uid="uid://cdjhvlhh2vtld" path="res://assets/materials/paleta_juego.png" id="2_dbbs1"]
 
 [resource]
