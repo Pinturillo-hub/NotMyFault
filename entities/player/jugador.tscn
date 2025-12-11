@@ -60,18 +60,17 @@ cull_mask = 1048573
 
 [node name="RayCast3D" type="RayCast3D" parent="Cabeza"]
 target_position = Vector3(0, 0, -3)
-collision_mask = 3
+collision_mask = 7
 
 [node name="ManoIzquierda" parent="Cabeza" instance=ExtResource("2_rfplf")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.413, 0.2)
-offset_reposo_cuerpo = Vector3(0.5, 0.7, -0.6)
+es_mano_izquierda = true
 
 [node name="PosicionAccion" parent="Cabeza/ManoIzquierda" index="1"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.4, 1.1826484, -1.0523126)
 
 [node name="ManoDerecha" parent="Cabeza" instance=ExtResource("2_rfplf")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.413, 0.2)
-offset_reposo_cuerpo = Vector3(0.5, 0.7, -0.6)
 
 [node name="PosicionAccion" parent="Cabeza/ManoDerecha" index="1"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.4, 1.1826484, -1.0523126)
@@ -86,6 +85,16 @@ grow_horizontal = 2
 grow_vertical = 2
 size_flags_horizontal = 4
 size_flags_vertical = 4
+
+[node name="BarraCargaDer" type="ProgressBar" parent="Interfaz/Centro"]
+visible = false
+layout_mode = 2
+rounded = true
+
+[node name="BarraCargaIzq" type="ProgressBar" parent="Interfaz/Centro"]
+visible = false
+layout_mode = 2
+rounded = true
 
 [node name="Cruceta" type="ColorRect" parent="Interfaz/Centro"]
 custom_minimum_size = Vector2(8, 8)

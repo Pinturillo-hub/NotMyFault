@@ -19,6 +19,8 @@ extends RigidBody3D
 @onready var visuales: Node3D = $ModeloCocodrilo
 @onready var bolsillo_attach: BoneAttachment3D = $ModeloCocodrilo/Armature/Skeleton3D/BolsilloAttachment
 @onready var bulto_visual: MeshInstance3D = $ModeloCocodrilo/Armature/Skeleton3D/BolsilloAttachment/BultoVisual
+@onready var barra_der: ProgressBar = $Interfaz/Centro/BarraCargaDer # Ajusta la ruta a tu nodo real
+@onready var barra_izq: ProgressBar = $Interfaz/Centro/BarraCargaIzq # Ajusta la ruta
 
 var barra_carga: ProgressBar = null
 
@@ -42,9 +44,12 @@ func _ready() -> void:
 	if bulto_visual: bulto_visual.visible = false
 	
 	if is_multiplayer_authority():
-		_inicializar_autoridad()
+		# Asignamos las barras de la UI a los scripts de las manos
+		mano_der.barra_carga_ui = barra_der
+		mano_izq.barra_carga_ui = barra_izq
 	else:
 		_inicializar_proxy()
+	
 
 func _inicializar_autoridad() -> void:
 	_crear_ui_cambiazo()

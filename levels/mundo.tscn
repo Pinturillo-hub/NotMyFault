@@ -1,4 +1,4 @@
-[gd_scene load_steps=19 format=3 uid="uid://d4cxkh35i4yug"]
+[gd_scene load_steps=26 format=3 uid="uid://d4cxkh35i4yug"]
 
 [ext_resource type="PackedScene" uid="uid://c8blhucs0pbvu" path="res://ui/menu_principal.tscn" id="1_3mt23"]
 [ext_resource type="Script" uid="uid://cf7564gn5jevr" path="res://objects/interactables/boton_prueba.gd" id="3_ms6pt"]
@@ -9,8 +9,23 @@
 [ext_resource type="Script" uid="uid://qykfl5lf13o3" path="res://levels/TimeManager.gd" id="7_vqklj"]
 [ext_resource type="PackedScene" uid="uid://c3fev03j5h626" path="res://objects/interactables/maquina_fichar.tscn" id="8_aoiuu"]
 [ext_resource type="PackedScene" uid="uid://cvr1nkvnou24v" path="res://assets/models/reloj_root.tscn" id="9_sckaf"]
+[ext_resource type="PackedScene" uid="uid://eb3mgjibxhjq" path="res://objects/grabables/documento.tscn" id="10_84o1m"]
+[ext_resource type="PackedScene" uid="uid://4ksuhuxi0xwg" path="res://objects/grabables/sello.tscn" id="11_ujyft"]
+[ext_resource type="PackedScene" uid="uid://gy3jqerbt7da" path="res://objects/interactables/bandeja.tscn" id="12_ujyft"]
 
-[sub_resource type="Environment" id="Environment_ubi47"]
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ujyft"]
+
+[sub_resource type="Sky" id="Sky_ujyft"]
+sky_material = SubResource("ProceduralSkyMaterial_ujyft")
+
+[sub_resource type="Environment" id="Environment_lqjyw"]
+background_mode = 2
+background_color = Color(0.5217873, 0.70831174, 0.531904, 1)
+sky = SubResource("Sky_ujyft")
+ambient_light_source = 3
+ambient_light_color = Color(0.25134712, 0.3404916, 0.37566376, 1)
+reflected_light_source = 2
+tonemap_mode = 2
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_xywc0"]
 size = Vector3(30, 0.5, 30)
@@ -19,7 +34,7 @@ size = Vector3(30, 0.5, 30)
 size = Vector3(30, 0.5, 30)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_pe05s"]
-albedo_color = Color(0.5882353, 1, 1, 1)
+albedo_color = Color(0.59000003, 1, 0.9385, 1)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_gejyx"]
 
@@ -47,9 +62,17 @@ properties/2/path = NodePath(".:duracion_jornada")
 properties/2/spawn = true
 properties/2/replication_mode = 1
 
+[sub_resource type="BoxMesh" id="BoxMesh_ujyft"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_lqjyw"]
+size = Vector3(3.453, 1.049, 6.734)
+
 [node name="Mundo" type="Node3D"]
 
 [node name="MenuPrincipal" parent="." instance=ExtResource("1_3mt23")]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_lqjyw")
 
 [node name="Jugadores" type="Node3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.1333392, 2.2423432)
@@ -58,16 +81,9 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.1333392, 2.2423432)
 _spawnable_scenes = PackedStringArray("uid://b3pttwwm6vxab")
 spawn_path = NodePath("../Jugadores")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
-environment = SubResource("Environment_ubi47")
-
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="WorldEnvironment"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.8756809, 10.456181, -1.260912)
-light_angular_distance = 39.9
-shadow_enabled = true
-
 [node name="Suelo" type="StaticBody3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -2.6391284, 0)
+collision_mask = 7
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Suelo"]
 shape = SubResource("BoxShape3D_xywc0")
@@ -97,13 +113,14 @@ script = ExtResource("4_ammij")
 replication_config = SubResource("SceneReplicationConfig_yo4b0")
 
 [node name="Puerta" parent="." instance=ExtResource("5_yo4b0")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.43150043, -1.8121545, -5.454479)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.43150043, -1.900698, -5.454479)
 
 [node name="CajaPrueba" parent="." instance=ExtResource("5_vqklj")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.9594796, -1.2323312)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.9762397, -1.9594796, -4.256891)
 
 [node name="CajaRota" parent="." instance=ExtResource("5_xjuv3")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.9594796, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.883248, -1.9594796, -3.0245597)
+es_ilegal = false
 
 [node name="SistemaTiempo" type="Node3D" parent="."]
 script = ExtResource("7_vqklj")
@@ -112,9 +129,32 @@ script = ExtResource("7_vqklj")
 replication_config = SubResource("SceneReplicationConfig_vqklj")
 
 [node name="MaquinaFichar" parent="." instance=ExtResource("8_aoiuu")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.6642773, -1.774826, -2.8774505)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.6642773, -1.9073975, -2.8774505)
 
 [node name="RelojRoot" parent="." instance=ExtResource("9_sckaf")]
-transform = Transform3D(0.307, 0, 0, 0, 0.307, 0, 0, 0, 0.307, 2.7427092, -0.20083857, -2.8626845)
+transform = Transform3D(0.307, 0, 0, 0, 0.307, 0, 0, 0, 0.307, 2.7427092, 0.04196, -2.8626845)
+
+[node name="Sello" parent="." instance=ExtResource("11_ujyft")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.7126403, -1.1681406, 3.75354)
+
+[node name="Mesa" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -2.175936, 0)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Mesa"]
+transform = Transform3D(3.5288672, 0, 0, 0, 1, 0, 0, 0, 6.8486853, 4.4277678, 0.25698447, 2.1840258)
+mesh = SubResource("BoxMesh_ujyft")
+surface_material_override/0 = SubResource("StandardMaterial3D_pe05s")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Mesa"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.4277678, 0.25698447, 2.1840258)
+shape = SubResource("BoxShape3D_lqjyw")
+
+[node name="Bandeja" parent="." instance=ExtResource("12_ujyft")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.6501575, -1.3687644, 1.5010672)
+documento_escena = ExtResource("10_84o1m")
+
+[node name="BandejaSalida" parent="." instance=ExtResource("12_ujyft")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.6501575, -1.3687644, -0.09016061)
+tipo = 1
 
 [editable path="Puerta"]

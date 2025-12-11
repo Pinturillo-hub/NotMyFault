@@ -21,6 +21,13 @@ const LIMBO_POS: Vector3 = Vector3(0, -200, 0)
 @export var malla_normal: Node3D
 @export var malla_rota: Node3D
 
+# --- CONFIGURACIÓN DE USO ---
+@export_group("Configuración Uso")
+@export var usar_animacion_golpe: bool = true 
+@export var distancia_golpe: float = 0.5 
+# NUEVO: ¿Qué capa ignorar al golpear? (Por defecto la 3: Objetos Pequeños)
+@export_flags_3d_physics var capa_fantasma_al_usar: int = 4 # Valor 4 = Layer 3 (Bit 2)
+
 # --- VARIABLES ---
 var _objetivo_posicion: Vector3 = Vector3.ZERO
 var _objetivo_rotacion: Quaternion = Quaternion.IDENTITY
@@ -28,7 +35,11 @@ var _tiempo_desde_ultima_orden: float = 0.0
 var _hay_orden_nueva: bool = false
 var _fuerza_tiro_1: float = 0.0
 var _fuerza_tiro_2: float = 0.0
-var _frame_teletransporte: int = 0 # Para saltar físicas un frame
+var _frame_teletransporte: int = 0 
+var _multiplicador_rigidez: float = 1.0
+
+# Máscara original para restaurarla después del golpe
+var _mascara_colision_original: int = 1 
 
 signal disputa_iniciada
 signal disputa_finalizada(ganador_id)
@@ -38,25 +49,22 @@ func _ready() -> void:
 	add_to_group("agarrables")
 	if es_ilegal: add_to_group("ilegal")
 	_actualizar_silueta(false)
+	
+	# Guardamos la máscara original al nacer
+	_mascara_colision_original = collision_mask
 
-# --- WATCHDOG (FIX INTERACCIÓN) ---
 func _process(_delta):
-	# Este bloque asegura que si el objeto cree que está libre, 
-	# realmente tenga las colisiones activas. 
-	# Soluciona la pérdida de paquetes RPC.
 	if en_bolsillo_de_id == 0 and id_sostenedor_1 == 0 and id_sostenedor_2 == 0:
 		if collision_layer == 0:
 			_configurar_fisicas_libre()
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
-	# 1. MODO BOLSILLO (Autoridad Absoluta)
 	if en_bolsillo_de_id != 0:
 		state.transform.origin = LIMBO_POS
 		state.linear_velocity = Vector3.ZERO
 		state.angular_velocity = Vector3.ZERO
 		return
 
-	# 2. MODO TELETRANSPORTE (Pop Instantáneo)
 	if _frame_teletransporte > 0:
 		state.transform.origin = _objetivo_posicion
 		state.linear_velocity = Vector3.ZERO
@@ -68,18 +76,17 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 
 	_tiempo_desde_ultima_orden += state.step
 	
-	# Autorreparación Server-Side
 	if id_sostenedor_1 == 0 and id_sostenedor_2 == 0 and collision_layer == 0:
 		_configurar_fisicas_libre()
 
-	# Fuerzas de muelle
 	if (id_sostenedor_1 != 0 or id_sostenedor_2 != 0) and _tiempo_desde_ultima_orden < 0.5:
 		if _hay_orden_nueva:
 			_aplicar_fuerzas_agarre(state)
 
 func _aplicar_fuerzas_agarre(state: PhysicsDirectBodyState3D) -> void:
 	var dist = _objetivo_posicion - state.transform.origin
-	var fuerza = (dist * RIGIDEZ_MUELLE) - (state.linear_velocity * AMORTIGUACION)
+	var rigidez_actual = RIGIDEZ_MUELLE * _multiplicador_rigidez
+	var fuerza = (dist * rigidez_actual) - (state.linear_velocity * AMORTIGUACION)
 	state.apply_central_force(fuerza)
 	
 	var b_limpia = state.transform.basis.orthonormalized()
@@ -95,7 +102,40 @@ func _aplicar_fuerzas_agarre(state: PhysicsDirectBodyState3D) -> void:
 	state.apply_torque(torque_global)
 	_hay_orden_nueva = false
 
-# --- TELETRANSPORTES Y LOGICA ---
+# --- MODIFICADORES TEMPORALES ---
+
+@rpc("call_local")
+func modificar_rigidez_temporal(factor: float, duracion: float):
+	_multiplicador_rigidez = factor
+	await get_tree().create_timer(duracion).timeout
+	_multiplicador_rigidez = 1.0
+
+# --- LÓGICA DE FANTASMA (ATRAVESAR OBJETOS) ---
+@rpc("call_local")
+func _activar_fantasma_accion(duracion: float):
+	# Solo el servidor gestiona colisiones reales, pero los clientes deben
+	# desactivarlas también para que la predicción visual no falle.
+	
+	# Quitamos la capa de objetos (Layer 3) de nuestra máscara
+	# Operación Bitwise: MASK & (~CAPA)
+	var nueva_mask = collision_mask & (~capa_fantasma_al_usar)
+	collision_mask = nueva_mask
+	
+	await get_tree().create_timer(duracion).timeout
+	
+	# Restauramos máscara original (mientras sigamos agarrados)
+	if id_sostenedor_1 != 0:
+		collision_mask = _mascara_colision_original
+
+# --- ACCIÓN PRINCIPAL ---
+@rpc("any_peer", "call_local")
+func usar_objeto():
+	# Si vamos a golpear, activamos el modo fantasma para no empujar papeles
+	if usar_animacion_golpe:
+		# Duración similar a la animación del golpe (0.3s - 0.4s)
+		_activar_fantasma_accion(0.4)
+
+# ... (RESTO DEL CÓDIGO IGUAL: RPCs, ROBOS, ETC) ...
 
 func ejecutar_robo_desde_servidor(nuevo_dueno_id: int, pos_salida: Vector3) -> void:
 	en_bolsillo_de_id = 0
@@ -110,15 +150,12 @@ func notificar_salida_bolsillo_robo(posicion: Vector3) -> void:
 	en_bolsillo_de_id = 0
 	_forzar_teletransporte(posicion)
 	visible = true
-	# Asegura que el cliente local actualice su física interna
 	if has_method("reset_physics_interpolation"): reset_physics_interpolation()
 
 func _forzar_teletransporte(pos: Vector3):
 	global_position = pos
 	_objetivo_posicion = pos
-	_frame_teletransporte = 2 # Saltamos física 2 frames para asentar la posición
-	
-	# Hard Reset
+	_frame_teletransporte = 2 
 	var xform = Transform3D(global_transform.basis, pos)
 	PhysicsServer3D.body_set_state(get_rid(), PhysicsServer3D.BODY_STATE_TRANSFORM, xform)
 	PhysicsServer3D.body_set_state(get_rid(), PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, Vector3.ZERO)
@@ -135,8 +172,6 @@ func _asignar_dueno(nuevo_id: int) -> void:
 	if nuevo_id != 0: _gestionar_excepciones_colision(nuevo_id, true)
 	_notificar_estado.rpc(id_sostenedor_1, 0, false)
 
-# --- RPCs ---
-
 @rpc("any_peer", "call_local")
 func salir_de_bolsillo(posicion_salida: Vector3) -> void:
 	en_bolsillo_de_id = 0
@@ -152,17 +187,19 @@ func entrar_en_bolsillo(id_dueno: int) -> void:
 	en_disputa = false
 	_configurar_fisicas_bolsillo()
 
-# --- CONFIG ESTADOS FÍSICOS (Con set_deferred para evitar bloqueos) ---
-
 func _configurar_fisicas_libre() -> void:
 	visible = true
 	set_deferred("freeze", false)
-	set_deferred("sleeping", false) # Despertar si estaba dormido
+	set_deferred("sleeping", false) 
+	# Restauramos la máscara completa al soltar
 	set_deferred("collision_layer", 1)
-	set_deferred("collision_mask", 1)
+	set_deferred("collision_mask", 1) # Asegúrate de que esto coincide con tu configuración global
 	gravity_scale = 1.0
 
 func _configurar_fisicas_agarrado() -> void:
+	# Guardamos la configuración "sana" antes de agarrar
+	_mascara_colision_original = 1 # Ojo: Ajusta esto a tu configuración (ej: 1 | 3)
+	
 	set_deferred("collision_layer", 1)
 	set_deferred("collision_mask", 1)
 	gravity_scale = 0.0
@@ -182,8 +219,6 @@ func _configurar_fisicas_bolsillo() -> void:
 	if has_method("reset_physics_interpolation"): reset_physics_interpolation()
 	visible = false
 
-# --- INTERACCIÓN ---
-
 @rpc("any_peer", "call_local", "unreliable_ordered")
 func actualizar_objetivo_agarre(posicion: Vector3, rotacion: Quaternion, id_jugador: int) -> void:
 	if not multiplayer.is_server(): return
@@ -196,35 +231,26 @@ func actualizar_objetivo_agarre(posicion: Vector3, rotacion: Quaternion, id_juga
 @rpc("any_peer", "call_local", "reliable")
 func intentar_coger(solicitante_id: int) -> void:
 	if not multiplayer.is_server(): return
-	
 	if en_bolsillo_de_id == solicitante_id:
 		en_bolsillo_de_id = 0
 		_configurar_fisicas_libre()
-
 	if en_bolsillo_de_id != 0 and en_bolsillo_de_id != solicitante_id: return
-
 	if id_sostenedor_1 == 0:
 		_asignar_dueno(solicitante_id)
 	elif id_sostenedor_1 != solicitante_id and id_sostenedor_2 == 0:
-		if not agarre_fuerte:
-			_asignar_dueno(solicitante_id)
-		else:
-			_iniciar_disputa(solicitante_id)
+		if not agarre_fuerte: _asignar_dueno(solicitante_id)
+		else: _iniciar_disputa(solicitante_id)
 
 @rpc("any_peer", "call_local", "reliable")
 func intentar_soltar(solicitante_id: int, impulso: Vector3) -> void:
 	if not multiplayer.is_server(): return
 	if impulso != Vector3.ZERO: apply_central_impulse(impulso)
-	
 	_gestionar_excepciones_colision(solicitante_id, false)
-	
 	if id_sostenedor_1 == solicitante_id: id_sostenedor_1 = 0
 	elif id_sostenedor_2 == solicitante_id: id_sostenedor_2 = 0
-	
 	if id_sostenedor_1 == 0 and id_sostenedor_2 == 0:
 		_configurar_fisicas_libre()
 		en_disputa = false
-	
 	_notificar_estado.rpc(id_sostenedor_1, id_sostenedor_2, en_disputa)
 
 @rpc("authority", "call_local", "reliable")
