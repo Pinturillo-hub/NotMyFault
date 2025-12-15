@@ -1,0 +1,16 @@
+[gd_scene load_steps=10 format=3 uid="uid://3m0jcry6asdr"]
+
+[ext_resource type="Script" uid="uid://lmsxd66r336c" path="res://prop_generico.gd" id="1_gbn25"]
+[ext_resource type="PackedScene" uid="uid://cbbifljcao6in" path="res://objects/grabables/mesa.tscn" id="2_foqkd"]
+[ext_resource type="PackedScene" uid="uid://eb3mgjibxhjq" path="res://objects/grabables/documento.tscn" id="3_bl8q8"]
+[ext_resource type="PackedScene" uid="uid://4ksuhuxi0xwg" path="res://objects/grabables/sello.tscn" id="4_kxyp4"]
+[ext_resource type="PackedScene" uid="uid://gy3jqerbt7da" path="res://objects/interactables/bandeja.tscn" id="5_ti2vy"]
+[ext_resource type="PackedScene" uid="uid://cvr1nkvnou24v" path="res://assets/models/reloj_root.tscn" id="6_dsm7l"]
+[ext_resource type="PackedScene" uid="uid://c3fev03j5h626" path="res://objects/interactables/maquina_fichar.tscn" id="7_bnmhq"]
+[ext_resource type="PackedScene" uid="uid://528pp3ywh828" path="res://objects/grabables/caja_rota.tscn" id="8_aeho4"]
+[ext_resource type="PackedScene" uid="uid://062ghmkf6c83" path="res://objects/grabables/caja_prueba.tscn" id="9_oo5ty"]
+
+[node name="PropGenerico" type="Node3D"]
+script = ExtResource("1_gbn25")
+catalogo = Array[PackedScene]([ExtResource("2_foqkd"), ExtResource("3_bl8q8"), ExtResource("4_kxyp4"), ExtResource("5_ti2vy"), ExtResource("6_dsm7l"), ExtResource("7_bnmhq"), ExtResource("8_aeho4"), ExtResource("9_oo5ty")])
+indice_seleccionado = null

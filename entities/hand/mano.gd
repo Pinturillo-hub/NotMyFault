@@ -18,7 +18,7 @@ extends Node3D
 
 var barra_carga_ui: ProgressBar = null 
 
-# --- ESTADO ---
+# --- ESTADO GENERAL ---
 var objeto_agarrado: RigidBody3D = null
 var _tiempo_pulsado: float = 0.0
 var _esta_pulsando: bool = false
@@ -27,22 +27,38 @@ var _modo_manosear: bool = false
 var _punto_agarre_local: Vector3 = Vector3.ZERO
 var _en_disputa_activa: bool = false
 var _tiempo_desde_agarre: float = 0.0
-var _z_original_accion: float = 0.0 # Posición original del Marker3D
-
+var _z_original_accion: float = 0.0 
 var _tween_activo: Tween
 
-func _ready() -> void:
-	# Guardar posición original del Marker3D para volver siempre ahí
-	_z_original_accion = pos_accion.position.z
+# --- ESTADO COLOCACIÓN ---
+var _modo_colocacion: bool = false
+var _estaba_colocando_input: bool = false # Para detectar flancos (Press/Release)
+var _colocacion_cancelada: bool = false
+var _fantasma_visual: MeshInstance3D = null
+var _material_fantasma: StandardMaterial3D = null
+var _posicion_fantasma_final: Vector3
+var _rotacion_fantasma_final: Vector3
 
-	# Inicialización visual
+# Ángulo máximo de inclinación permitido (45 grados = solo suelos y rampas suaves)
+const ANGULO_MAXIMO_SUELO: float = 45.0
+
+func _ready() -> void:
+	_z_original_accion = pos_accion.position.z
+	
+	# Material Rojo Brillante (Unshaded)
+	_material_fantasma = StandardMaterial3D.new()
+	_material_fantasma.albedo_color = Color(1, 0, 0, 0.6)
+	_material_fantasma.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_material_fantasma.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_material_fantasma.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED 
+	
 	await get_tree().process_frame
 	if jugador_padre:
 		_actualizar_visuales(0.0)
 
 func _physics_process(delta: float) -> void:
-	# Lógica Barra de Carga
-	if _esta_pulsando and objeto_agarrado and not _ignorar_input_soltar:
+	# Barra de carga (Ocultar si colocamos)
+	if _esta_pulsando and objeto_agarrado and not _ignorar_input_soltar and not _modo_colocacion:
 		_tiempo_pulsado += delta
 		if _tiempo_pulsado >= tiempo_limite_caida:
 			print("[MANO] ¡Se te resbaló!")
@@ -53,28 +69,23 @@ func _physics_process(delta: float) -> void:
 	else:
 		_ocultar_barra_ui()
 
-	# Gestión Objeto
+	# Gestión Objeto Agarrado
 	if objeto_agarrado:
 		_tiempo_desde_agarre += delta
 		if _tiempo_desde_agarre > 0.5 and not _en_disputa_activa:
 			if is_instance_valid(objeto_agarrado) and objeto_agarrado.get("id_sostenedor_1") != multiplayer.get_unique_id():
 				limpiar_estado_local()
 		
+		# Siempre enviamos datos físicos para mantener el objeto en la mano hasta confirmar
 		if is_instance_valid(objeto_agarrado):
 			_enviar_datos_fisicos()
 	
 	_actualizar_visuales(delta)
 
-# --- VISUALES Y MOVIMIENTO ---
 func _actualizar_visuales(delta: float) -> void:
-	# Si estamos en animación de golpe, dejamos que el Tween controle pos_accion
-	# y la física controle el objeto. Nosotros solo pintamos la mano en el objeto.
-	
 	var destino: Vector3
-	var rot_destino: Vector3
-	
+
 	if objeto_agarrado and is_instance_valid(objeto_agarrado):
-		# MODO AGARRE: Seguir al objeto
 		destino = objeto_agarrado.to_global(_punto_agarre_local)
 		var dist_sq = mesh.global_position.distance_squared_to(destino)
 		
@@ -88,24 +99,16 @@ func _actualizar_visuales(delta: float) -> void:
 				mesh.look_at(destino, Vector3.UP)
 			
 	elif _modo_manosear:
-		# MODO INTERACCIÓN VACÍA
 		destino = pos_accion.global_position
-		rot_destino = pos_accion.global_rotation
-		_interpolar_reposo(destino, rot_destino, delta)
-		
+		_interpolar_reposo(destino, pos_accion.global_rotation, delta)
 	else:
-		# MODO REPOSO
 		if jugador_padre:
 			var offset_final = offset_reposo_cuerpo
 			offset_final.x = -abs(offset_final.x) if es_mano_izquierda else abs(offset_final.x)
-			
 			destino = jugador_padre.to_global(offset_final)
-			rot_destino = jugador_padre.global_rotation
+			_interpolar_reposo(destino, jugador_padre.global_rotation, delta)
 		else:
-			destino = global_position
-			rot_destino = global_rotation
-		
-		_interpolar_reposo(destino, rot_destino, delta)
+			_interpolar_reposo(global_position, global_rotation, delta)
 
 func _interpolar_reposo(dest: Vector3, rot_dest: Vector3, delta: float):
 	mesh.global_position = mesh.global_position.lerp(dest, delta * 20.0)
@@ -113,14 +116,55 @@ func _interpolar_reposo(dest: Vector3, rot_dest: Vector3, delta: float):
 	mesh.global_rotation.y = lerp_angle(mesh.global_rotation.y, rot_dest.y, delta * 15)
 	mesh.global_rotation.z = lerp_angle(mesh.global_rotation.z, rot_dest.z, delta * 15)
 
-# --- INPUT ---
-func gestionar_input(just_pressed: bool, is_pressed: bool, info: Dictionary) -> void:
+# --- INPUT (LÓGICA FINAL) ---
+func gestionar_input(just_pressed: bool, is_pressed: bool, is_placing_held: bool, info: Dictionary) -> void:
 	_esta_pulsando = is_pressed
 	
+	# Detectamos flancos de la tecla E (Colocar)
+	var e_just_pressed = is_placing_held and not _estaba_colocando_input
+	var e_just_released = not is_placing_held and _estaba_colocando_input
+	_estaba_colocando_input = is_placing_held
+	
+	# --- MODO COLOCACIÓN ---
+	if objeto_agarrado:
+		
+		# 1. EMPEZAR A COLOCAR (Pulsar E)
+		if e_just_pressed:
+			_iniciar_modo_colocacion()
+		
+		# 2. DURANTE LA COLOCACIÓN (Mantener E)
+		if _modo_colocacion:
+			# Si pulsamos Click Izquierdo -> CANCELAR
+			if just_pressed:
+				_colocacion_cancelada = true
+				_limpiar_fantasma()
+				print("[MANO] Colocación cancelada.")
+				# Importante: No retornamos para que el click no cuente como disparo
+				# sino que consumimos el evento aquí
+			
+			if not _colocacion_cancelada:
+				_actualizar_fantasma(info)
+		
+		# 3. CONFIRMAR COLOCACIÓN (Soltar E)
+		if e_just_released and _modo_colocacion:
+			if not _colocacion_cancelada:
+				# Solo ejecutamos si el fantasma es visible (sitio válido)
+				if _fantasma_visual and _fantasma_visual.visible:
+					_ejecutar_colocacion_suave()
+			
+			# Limpieza final
+			_limpiar_fantasma()
+			_modo_colocacion = false
+			_colocacion_cancelada = false
+	
+	# Si estamos colocando (o acabamos de cancelar), bloqueamos el disparo normal
+	if _modo_colocacion or _colocacion_cancelada: 
+		return
+
+	# --- MODO ACCIÓN (Click Normal, sin E) ---
 	if just_pressed:
 		_tiempo_pulsado = 0.0
 		if not objeto_agarrado:
-			# MANO VACÍA
 			if info.cuerpo:
 				if info.cuerpo.has_method("interactuar"):
 					info.cuerpo.interactuar()
@@ -132,7 +176,6 @@ func gestionar_input(just_pressed: bool, is_pressed: bool, info: Dictionary) -> 
 			else:
 				_modo_manosear = true
 		else:
-			# MANO LLENA
 			_ignorar_input_soltar = false
 	
 	if is_pressed:
@@ -143,16 +186,102 @@ func gestionar_input(just_pressed: bool, is_pressed: bool, info: Dictionary) -> 
 		if not just_pressed: 
 			if objeto_agarrado and not _ignorar_input_soltar:
 				_decidir_accion_final()
-			
 			_ignorar_input_soltar = false
 			_tiempo_pulsado = 0.0
 
+# --- LÓGICA FANTASMA ---
+
+func _iniciar_modo_colocacion():
+	_modo_colocacion = true
+	_colocacion_cancelada = false
+	_ocultar_barra_ui()
+	_limpiar_fantasma()
+	
+	var nodo_malla = _buscar_nodo_mesh(objeto_agarrado)
+	if not nodo_malla:
+		_colocacion_cancelada = true
+		return
+		
+	_fantasma_visual = MeshInstance3D.new()
+	get_tree().root.add_child(_fantasma_visual)
+	
+	_fantasma_visual.mesh = nodo_malla.mesh
+	_fantasma_visual.scale = objeto_agarrado.scale * nodo_malla.scale
+	
+	for i in range(_fantasma_visual.mesh.get_surface_count()):
+		_fantasma_visual.set_surface_override_material(i, _material_fantasma)
+
+func _buscar_nodo_mesh(nodo_raiz: Node) -> MeshInstance3D:
+	if "malla_normal" in nodo_raiz and nodo_raiz.malla_normal is MeshInstance3D:
+		return nodo_raiz.malla_normal
+	for hijo in nodo_raiz.get_children():
+		if hijo is MeshInstance3D and hijo.visible: return hijo
+		for nieto in hijo.get_children():
+			if nieto is MeshInstance3D and nieto.visible: return nieto
+	return null
+
+func _actualizar_fantasma(info: Dictionary):
+	if not _fantasma_visual: return
+	
+	var punto = info.get("punto", Vector3.ZERO)
+	var normal = info.get("normal", Vector3.UP)
+	
+	# 1. Si no hay colisión, ocultar
+	if punto == Vector3.ZERO:
+		_fantasma_visual.visible = false
+		return
+	
+	# 2. FILTRO DE SUPERFICIE HORIZONTAL
+	# Calculamos el ángulo respecto a ARRIBA (Vector3.UP)
+	var angulo = rad_to_deg(normal.angle_to(Vector3.UP))
+	
+	# Si la superficie está muy inclinada (> 45 grados), NO permitimos colocar
+	if angulo > ANGULO_MAXIMO_SUELO:
+		_fantasma_visual.visible = false
+		return
+	
+	# Si llegamos aquí, es válido
+	_fantasma_visual.visible = true
+	_fantasma_visual.global_position = punto
+	
+	if normal.is_normalized() and not normal.is_zero_approx():
+		_alinear_con_y(_fantasma_visual, normal)
+	
+	_posicion_fantasma_final = _fantasma_visual.global_position
+	_rotacion_fantasma_final = _fantasma_visual.global_rotation
+
+func _alinear_con_y(nodo: Node3D, nueva_y: Vector3):
+	var z_original = nodo.global_transform.basis.z
+	var x_nueva = nueva_y.cross(z_original).normalized()
+	if x_nueva.is_zero_approx():
+		x_nueva = nueva_y.cross(Vector3.RIGHT).normalized()
+	var z_nueva = x_nueva.cross(nueva_y).normalized()
+	nodo.global_transform.basis = Basis(x_nueva, nueva_y, z_nueva)
+
+func _limpiar_fantasma():
+	if _fantasma_visual:
+		_fantasma_visual.queue_free()
+		_fantasma_visual = null
+
+func _ejecutar_colocacion_suave():
+	if not objeto_agarrado: return
+	
+	objeto_agarrado.rpc("salir_de_bolsillo", _posicion_fantasma_final)
+	objeto_agarrado.global_rotation = _rotacion_fantasma_final
+	objeto_agarrado.linear_velocity = Vector3.ZERO
+	objeto_agarrado.angular_velocity = Vector3.ZERO
+	
+	limpiar_estado_local()
+
+# --- RESTO DE FUNCIONES ---
+# _decidir_accion_final, _resetear_input, _animar_golpe_fisico, _animar_uso_suave, 
+# forzar_agarre_inmediato, _intentar_agarrar, soltar, limpiar_estado_local, 
+# _enviar_datos_fisicos, UI helpers, etc.
+
 func _decidir_accion_final():
 	if _tiempo_pulsado < tiempo_para_lanzar:
-		# USAR
 		if objeto_agarrado.has_method("usar_objeto"):
 			objeto_agarrado.rpc("usar_objeto")
-		
 		if objeto_agarrado.get("usar_animacion_golpe"):
 			var dist = objeto_agarrado.get("distancia_golpe")
 			if dist == null: dist = 0.4
@@ -160,7 +289,6 @@ func _decidir_accion_final():
 		else:
 			_animar_uso_suave()
 	else:
-		# LANZAR
 		var rango = tiempo_carga_maxima - tiempo_para_lanzar
 		var carga = clamp((_tiempo_pulsado - tiempo_para_lanzar) / rango, 0.0, 1.0)
 		var fuerza = lerp(fuerza_lanzamiento, fuerza_lanzamiento_maxima, carga)
@@ -173,28 +301,15 @@ func _resetear_input():
 	_modo_manosear = false
 	_ocultar_barra_ui()
 
-# --- ACCIONES FÍSICAS (AGARRE Y TWEEN CORREGIDO) ---
-
 func _animar_golpe_fisico(distancia: float):
 	if _tween_activo and _tween_activo.is_valid(): _tween_activo.kill()
-	
 	_tween_activo = create_tween()
 	_tween_activo.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	
-	# 1. ENDURECER OBJETO (Importante para que no vibre)
 	if objeto_agarrado and objeto_agarrado.has_method("modificar_rigidez_temporal"):
 		objeto_agarrado.rpc("modificar_rigidez_temporal", 10.0, 0.3)
-	
-	# 2. CALCULAR OBJETIVO
-	# Multiplicamos distancia para asegurar overshoot (que atraviese un poco)
 	var distancia_reforzada = distancia * 1.5
 	var objetivo_golpe = _z_original_accion - distancia_reforzada
-	
-	# 3. MOVER SOLO EL TARGET FÍSICO (pos_accion)
-	# La malla (mesh) seguirá al objeto gracias a _actualizar_visuales
 	_tween_activo.tween_property(pos_accion, "position:z", objetivo_golpe, 0.1)
-	
-	# 4. RETORNO A POSICIÓN ORIGINAL (No a 0.0)
 	_tween_activo.tween_property(pos_accion, "position:z", _z_original_accion, 0.2)
 
 func _animar_uso_suave():
@@ -247,7 +362,6 @@ func _enviar_datos_fisicos() -> void:
 	var rot_destino = Quaternion(pos_accion.global_transform.basis.orthonormalized())
 	objeto_agarrado.rpc("actualizar_objetivo_agarre", pos_destino, rot_destino, multiplayer.get_unique_id())
 
-# --- UI Y HELPERS ---
 func _actualizar_barra_ui():
 	if barra_carga_ui:
 		barra_carga_ui.visible = true

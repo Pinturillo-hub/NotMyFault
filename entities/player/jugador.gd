@@ -19,37 +19,31 @@ extends RigidBody3D
 @onready var visuales: Node3D = $ModeloCocodrilo
 @onready var bolsillo_attach: BoneAttachment3D = $ModeloCocodrilo/Armature/Skeleton3D/BolsilloAttachment
 @onready var bulto_visual: MeshInstance3D = $ModeloCocodrilo/Armature/Skeleton3D/BolsilloAttachment/BultoVisual
-@onready var barra_der: ProgressBar = $Interfaz/Centro/BarraCargaDer # Ajusta la ruta a tu nodo real
-@onready var barra_izq: ProgressBar = $Interfaz/Centro/BarraCargaIzq # Ajusta la ruta
+@onready var barra_der: ProgressBar = $Interfaz/Centro/BarraCargaDer
+@onready var barra_izq: ProgressBar = $Interfaz/Centro/BarraCargaIzq
 
 var barra_carga: ProgressBar = null
-
-# --- VARIABLES ---
 var _rotacion_objetivo_y: float = 0.0
 var _direccion_input: Vector3 = Vector3.ZERO
 var _altura_base_visuales: float = 0.0
-var _objeto_en_bolsillo: RigidBody3D = null # Referencia genérica para evitar dependencias cíclicas fuertes
+var _objeto_en_bolsillo: RigidBody3D = null
 
-# --- ESTADO CAMBIAZO ---
+# --- ESTADO ROBO ---
 var _timer_cambiazo: float = 0.0
 var _victima_cambiazo: Node3D = null
 var _mano_activa_cambiazo: Node3D = null
 
-func _enter_tree() -> void:
-	set_multiplayer_authority(name.to_int())
+func _enter_tree() -> void: set_multiplayer_authority(name.to_int())
 
 func _ready() -> void:
 	add_to_group("jugadores")
 	if visuales: _altura_base_visuales = visuales.position.y
 	if bulto_visual: bulto_visual.visible = false
-	
 	if is_multiplayer_authority():
-		# Asignamos las barras de la UI a los scripts de las manos
 		mano_der.barra_carga_ui = barra_der
 		mano_izq.barra_carga_ui = barra_izq
 	else:
 		_inicializar_proxy()
-	
 
 func _inicializar_autoridad() -> void:
 	_crear_ui_cambiazo()
@@ -65,8 +59,7 @@ func _inicializar_proxy() -> void:
 	set_process(false)
 	_cambiar_capa_visual(1)
 
-# --- INPUT HANDLING ---
-
+# --- INPUT ---
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED else Input.MOUSE_MODE_CAPTURED
@@ -87,43 +80,51 @@ func _procesar_mirada(event: InputEventMouseMotion) -> void:
 	_rotacion_objetivo_y -= event.relative.x * sensibilidad_raton
 
 func _gestionar_accion_mano(event: InputEvent, accion: String, mano: Node3D, mirando_abajo: bool, info: Dictionary) -> void:
-	if not event.is_action(accion): return
+	# 1. Estado actual de las teclas
+	var colocando = Input.is_action_pressed("colocar")
+	var click_sostenido = Input.is_action_pressed(accion)
+	var just_click = event.is_action_pressed(accion)
 	
-	var just = event.is_action_pressed(accion)
-	var held = event.is_pressed()
+	# 2. ¿Es este evento relevante para la mano?
+	# - Es un click de esta mano
+	# - Es un evento de la tecla COLOCAR (Presionar O SOLTAR) <--- ¡ESTO FALTABA!
+	# - Estamos en modo colocación y movemos el ratón
+	var es_evento_colocar = event.is_action("colocar")
+	var es_relevante = event.is_action(accion) or es_evento_colocar or (colocando and event is InputEventMouseMotion)
 	
-	if held and mano.objeto_agarrado and info.cuerpo and info.cuerpo.is_in_group("jugadores"):
+	# Si no hay evento relevante y no estamos manteniendo click, salimos
+	if not es_relevante and not click_sostenido: 
+		return
+	
+	# Lógica de Robo
+	if click_sostenido and mano.objeto_agarrado and info.cuerpo and info.cuerpo.is_in_group("jugadores"):
 		if _es_espalda_valida(info.cuerpo):
 			_actualizar_estado_cambiazo(mano, info.cuerpo, true)
 			return
 	
-	if not held or not info.cuerpo or not info.cuerpo.is_in_group("jugadores"):
+	if not click_sostenido or not info.cuerpo or not info.cuerpo.is_in_group("jugadores"):
 		_actualizar_estado_cambiazo(null, null, false)
 
 	if _victima_cambiazo == null:
-		if just and mirando_abajo:
+		if just_click and mirando_abajo:
 			_gestionar_bolsillo_propio(mano)
 		else:
-			mano.gestionar_input(just, held, info)
+			# Pasamos el estado 'colocando' (que será false al soltar) a la mano
+			mano.gestionar_input(just_click, click_sostenido, colocando, info)
 
-# --- LÓGICA DE JUEGO & FÍSICAS ---
-
+# --- FÍSICAS ---
 func _process(delta: float) -> void:
 	if not is_multiplayer_authority(): return
-	
 	var input = Input.get_vector("izquierda", "derecha", "adelante", "atras")
 	_direccion_input = Vector3(input.x, 0, input.y).normalized()
-	
 	_procesar_progreso_cambiazo(delta)
 	_actualizar_cruceta()
 	_animar_visuales(delta)
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	if not is_multiplayer_authority(): return
-	
 	var nueva_rotacion := Basis(Vector3.UP, _rotacion_objetivo_y)
 	state.transform.basis = nueva_rotacion
-	
 	var dir_mov = nueva_rotacion * _direccion_input
 	var vel_actual = state.linear_velocity
 	var vel_h = Vector2(vel_actual.x, vel_actual.z)
@@ -131,15 +132,18 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	vel_h = vel_h.move_toward(objetivo, aceleracion_tierra * state.step)
 	state.linear_velocity = Vector3(vel_h.x, state.linear_velocity.y, vel_h.y)
 
-# --- FUNCIÓN AÑADIDA PARA SISTEMA JEFE ---
-func tiene_objeto_ilegal() -> bool:
-	# Verificamos manos y bolsillo
-	var der = mano_der.objeto_agarrado and mano_der.objeto_agarrado.is_in_group("ilegal")
-	var izq = mano_izq.objeto_agarrado and mano_izq.objeto_agarrado.is_in_group("ilegal")
-	var bol = _objeto_en_bolsillo and _objeto_en_bolsillo.is_in_group("ilegal")
-	return der or izq or bol
+# --- HELPERS ---
+func _obtener_info_raycast() -> Dictionary:
+	if raycast.is_colliding():
+		return {
+			"cuerpo": raycast.get_collider(), 
+			"punto": raycast.get_collision_point(),
+			"normal": raycast.get_collision_normal()
+		}
+	return {"cuerpo": null, "punto": Vector3.ZERO, "normal": Vector3.UP}
 
-# --- SISTEMA DE BOLSILLO Y CAMBIAZO ---
+# ... (RESTO DE FUNCIONES IGUALES: _gestionar_bolsillo_propio, _meter_objeto_en_bolsillo, _sacar_objeto_de_bolsillo, _actualizar_estado_cambiazo, _procesar_progreso_cambiazo, _finalizar_cambiazo, _servidor_procesar_cambiazo, RPCs, etc.)
+# No las repito para ahorrar espacio, mantén las que tenías.
 
 func _gestionar_bolsillo_propio(mano: Node3D) -> void:
 	if mano.objeto_agarrado:
@@ -149,7 +153,6 @@ func _gestionar_bolsillo_propio(mano: Node3D) -> void:
 			_sacar_objeto_de_bolsillo(true, mano)
 		_meter_objeto_en_bolsillo(obj)
 		return
-
 	if _objeto_en_bolsillo:
 		_sacar_objeto_de_bolsillo(true, mano)
 
@@ -163,30 +166,16 @@ func _sacar_objeto_de_bolsillo(equipar: bool, mano_destino: Node3D) -> void:
 	if not _objeto_en_bolsillo: return
 	var objeto = _objeto_en_bolsillo
 	_objeto_en_bolsillo = null
-	
 	var pos_salida = mano_destino.pos_accion.global_position if equipar else bolsillo_attach.global_position
-	
 	if equipar:
-		# --- PREDICCIÓN DE CLIENTE (POPPING INSTANTÁNEO) ---
-		# 1. Teletransportamos visualmente YA
 		objeto.global_position = pos_salida
-		if objeto.has_method("reset_physics_interpolation"):
-			objeto.reset_physics_interpolation()
-		
-		# 2. Hacemos visible YA (sin esperar al server)
+		if objeto.has_method("reset_physics_interpolation"): objeto.reset_physics_interpolation()
 		objeto.visible = true 
-		
-		# 3. Forzamos el agarre local
 		mano_destino.forzar_agarre_inmediato(objeto, pos_salida)
-		
-		# 4. Enviamos la petición al server
 		objeto.rpc("intentar_coger", multiplayer.get_unique_id())
 	else:
 		objeto.rpc("salir_de_bolsillo", pos_salida)
-		
 	rpc("_actualizar_bulto_visual", false)
-
-# --- LÓGICA DE ROBO ---
 
 func _actualizar_estado_cambiazo(mano: Node3D, victima: Node3D, activo: bool) -> void:
 	if not activo:
@@ -195,7 +184,6 @@ func _actualizar_estado_cambiazo(mano: Node3D, victima: Node3D, activo: bool) ->
 		_timer_cambiazo = 0.0
 		if barra_carga: barra_carga.visible = false
 		return
-
 	if _victima_cambiazo != victima:
 		_victima_cambiazo = victima
 		_mano_activa_cambiazo = mano
@@ -213,12 +201,10 @@ func _finalizar_cambiazo() -> void:
 	if not mi_objeto: 
 		_actualizar_estado_cambiazo(null, null, false)
 		return
-	
 	var ruta_mi_objeto = mi_objeto.get_path()
 	_mano_activa_cambiazo.limpiar_estado_local() 
 	var id_victima = _victima_cambiazo.name.to_int()
 	var pos_robo = _mano_activa_cambiazo.pos_accion.global_position
-	
 	rpc_id(1, "servidor_procesar_cambiazo", ruta_mi_objeto, id_victima, _mano_activa_cambiazo.name, pos_robo)
 	_actualizar_estado_cambiazo(null, null, false)
 
@@ -228,7 +214,6 @@ func servidor_procesar_cambiazo(ruta_obj_entrante: NodePath, id_victima: int, no
 	var obj_entrante = get_node_or_null(ruta_obj_entrante)
 	var nodo_victima = _buscar_jugador_por_id(id_victima)
 	var id_ladron = multiplayer.get_remote_sender_id()
-	
 	if not nodo_victima: return
 	
 	var obj_saliente = nodo_victima._objeto_en_bolsillo
@@ -238,7 +223,6 @@ func servidor_procesar_cambiazo(ruta_obj_entrante: NodePath, id_victima: int, no
 		var nodo_ladron = _buscar_jugador_por_id(id_ladron)
 		if nodo_ladron:
 			nodo_ladron.rpc("cliente_recibir_objeto_en_mano", obj_saliente.get_path(), nombre_mano_ladron)
-	
 	if obj_entrante:
 		obj_entrante.rpc("entrar_en_bolsillo", id_victima)
 		nodo_victima.rpc("asignar_objeto_bolsillo_remoto", obj_entrante.get_path())
@@ -263,8 +247,6 @@ func asignar_objeto_bolsillo_remoto(ruta: NodePath) -> void:
 func _actualizar_bulto_visual(visible_bulto: bool) -> void:
 	if bulto_visual: bulto_visual.visible = visible_bulto
 
-# --- HELPERS ---
-
 func _crear_ui_cambiazo() -> void:
 	barra_carga = ProgressBar.new()
 	if has_node("Interfaz/Centro"):
@@ -278,11 +260,6 @@ func _es_espalda_valida(victima: Node3D) -> bool:
 	var mi_frente = -global_transform.basis.z
 	var su_frente = -victima.global_transform.basis.z
 	return mi_frente.dot(su_frente) > 0.0
-
-func _obtener_info_raycast() -> Dictionary:
-	if raycast.is_colliding():
-		return {"cuerpo": raycast.get_collider(), "punto": raycast.get_collision_point()}
-	return {"cuerpo": null, "punto": Vector3.ZERO}
 
 func _cambiar_capa_visual(capa: int) -> void:
 	if not visuales: return
@@ -308,32 +285,20 @@ func _actualizar_cruceta() -> void:
 		color = Color(0.6, 0.0, 0.8, 1.0)
 	cruceta.color = color
 
-# --- ESTÉTICA DE MOVIMIENTO TORPE ---
 func _animar_visuales(delta: float) -> void:
 	if not visuales: return
-	
-	# Obtenemos velocidad relativa al jugador
 	var vel_local = global_transform.basis.inverse() * linear_velocity
 	var velocidad_horizontal = Vector2(vel_local.x, vel_local.z).length()
-	
-	# 1. INCLINACIÓN HACIA LA DIRECCIÓN DE MOVIMIENTO (Tontorrón)
-	# Inclinamos al cocodrilo hacia donde va (Eje X local -> Rot Z visual, Eje Z local -> Rot X visual)
-	# Nota: Invertimos signos para "caerse" hacia adelante
 	var target_z = clamp(vel_local.x * 0.15, -0.4, 0.4) 
 	var target_x = clamp(-vel_local.z * 0.15, -0.4, 0.4)
-	
 	visuales.rotation.z = lerp_angle(visuales.rotation.z, -target_z, delta * 5.0)
 	visuales.rotation.x = lerp_angle(visuales.rotation.x, target_x, delta * 5.0)
-	
-	# 2. SALTITO TORPE (Bobbing agresivo cuando se mueve)
 	if velocidad_horizontal > 1.0:
-		var frecuencia_saltos = 15.0 # Saltitos rápidos
-		var altura_salto = 0.15      # Bastante notables
-		# Usamos abs(sin) para que sean rebotes en el suelo, no ondas senoidales
+		var frecuencia_saltos = 15.0
+		var altura_salto = 0.15
 		var rebote = abs(sin(Time.get_ticks_msec() * 0.001 * frecuencia_saltos)) * altura_salto
 		visuales.position.y = lerp(visuales.position.y, _altura_base_visuales + rebote, delta * 15.0)
 	else:
-		# Vuelta a reposo suave
 		visuales.position.y = lerp(visuales.position.y, _altura_base_visuales, delta * 5.0)
 
 func _buscar_jugador_por_id(id: int) -> Node:
@@ -341,3 +306,9 @@ func _buscar_jugador_por_id(id: int) -> Node:
 	if get_tree().root.has_node(ruta):
 		return get_tree().root.get_node(ruta).get_node_or_null(str(id))
 	return null
+
+func tiene_objeto_ilegal() -> bool:
+	var der = mano_der.objeto_agarrado and mano_der.objeto_agarrado.is_in_group("ilegal")
+	var izq = mano_izq.objeto_agarrado and mano_izq.objeto_agarrado.is_in_group("ilegal")
+	var bol = _objeto_en_bolsillo and _objeto_en_bolsillo.is_in_group("ilegal")
+	return der or izq or bol

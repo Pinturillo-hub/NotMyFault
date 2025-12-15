@@ -26,22 +26,25 @@ collision_mask = 5
 script = ExtResource("2_iqpdf")
 
 [node name="CollisionShape3D" parent="." index="0"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2384479, 0)
 shape = SubResource("BoxShape3D_iqpdf")
 
 [node name="mango" type="MeshInstance3D" parent="." index="1"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.007346779, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2311011, 0)
 mesh = SubResource("CapsuleMesh_iqpdf")
 skeleton = NodePath("../MeshInstance3D")
 surface_material_override/0 = SubResource("StandardMaterial3D_ubi47")
 
 [node name="MeshInstance3D" parent="." index="2"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.18760362, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.050844267, 0)
 mesh = SubResource("BoxMesh_gejyx")
 surface_material_override/0 = SubResource("StandardMaterial3D_ubi47")
 
 [node name="DetectorImpacto" type="Area3D" parent="." index="4"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.22459538, 0)
 collision_layer = 4
 collision_mask = 5
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="DetectorImpacto" index="0"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.013852522, 0)
 shape = SubResource("BoxShape3D_lf680")

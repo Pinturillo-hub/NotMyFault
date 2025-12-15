@@ -10,6 +10,8 @@ friction = 0.0
 [sub_resource type="CylinderMesh" id="CylinderMesh_rfplf"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_shl25"]
+radius = 0.3388672
+height = 1.5117188
 
 [sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_pfvk3"]
 properties/0/path = NodePath(".:linear_velocity")
@@ -34,7 +36,7 @@ linear_damp = 5.0
 script = ExtResource("1_f7wae")
 
 [node name="ModeloCocodrilo" parent="." instance=ExtResource("2_ml0ux")]
-transform = Transform3D(-1.585, 0, -2.3932836e-07, 0, 1.585, 0, 2.3932836e-07, 0, -1.585, 0, 0.42931747, 0)
+transform = Transform3D(-1, 0, -1.509958e-07, 0, 1, 0, 1.509958e-07, 0, -1, 0, 0.42931747, 0)
 
 [node name="BolsilloAttachment" type="BoneAttachment3D" parent="ModeloCocodrilo/Armature/Skeleton3D" index="0"]
 transform = Transform3D(1, -1.4210855e-13, 2.5288102e-07, -1.0004073e-07, 0.9184211, 0.39560443, -2.3225141e-07, -0.39560446, 0.9184209, 9.0667307e-10, 0.6666366, 0.07255995)
@@ -49,13 +51,14 @@ mesh = SubResource("CylinderMesh_rfplf")
 layers = 2
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.024264038, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.26840466, 0)
 shape = SubResource("CapsuleShape3D_shl25")
 
 [node name="Cabeza" type="Node3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.413, -0.71254766)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2251505, -0.28485048)
 
 [node name="Camera3D" type="Camera3D" parent="Cabeza"]
+transform = Transform3D(1, 0, 0, 0, 0.9999974, 0.0023038327, 0, -0.0023038327, 0.9999974, 0, 0, -0.13108873)
 cull_mask = 1048573
 
 [node name="RayCast3D" type="RayCast3D" parent="Cabeza"]
@@ -63,17 +66,19 @@ target_position = Vector3(0, 0, -3)
 collision_mask = 7
 
 [node name="ManoIzquierda" parent="Cabeza" instance=ExtResource("2_rfplf")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.413, 0.2)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.3, -0.6248953, -0.018969357)
 es_mano_izquierda = true
+offset_reposo_cuerpo = Vector3(0.4, 0.6, -0.6)
 
 [node name="PosicionAccion" parent="Cabeza/ManoIzquierda" index="1"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.4, 1.1826484, -1.0523126)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.4, 0.4147117, -1.0523126)
 
 [node name="ManoDerecha" parent="Cabeza" instance=ExtResource("2_rfplf")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.413, 0.2)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.3, -0.61789525, -0.018969357)
+offset_reposo_cuerpo = Vector3(0.4, 0.6, -0.6)
 
 [node name="PosicionAccion" parent="Cabeza/ManoDerecha" index="1"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.4, 1.1826484, -1.0523126)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.4, 0.4147117, -1.0523126)
 
 [node name="Interfaz" type="CanvasLayer" parent="."]
 

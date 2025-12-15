@@ -1,0 +1,46 @@
+[gd_scene load_steps=8 format=3 uid="uid://cbbifljcao6in"]
+
+[ext_resource type="PackedScene" uid="uid://vxmgcjayd4hj" path="res://objects/grabables/objeto_agarrable.tscn" id="1_3ewnu"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_m8580"]
+size = Vector3(0.873, 0.092, 1.727)
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_sema4"]
+top_radius = 0.118
+bottom_radius = 0.34
+height = 0.609
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_c04xl"]
+albedo_color = Color(0.5017893, 0.42227724, 0.31236032, 1)
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_444eu"]
+height = 0.609
+radius = 0.30273438
+
+[sub_resource type="BoxMesh" id="BoxMesh_dh1fv"]
+size = Vector3(0.873, 0.092, 1.727)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_pgpyi"]
+albedo_color = Color(0.7017098, 0.49346644, 0.22251272, 1)
+
+[node name="Mesa" instance=ExtResource("1_3ewnu")]
+mass = 30.0
+
+[node name="CollisionShape3D" parent="." index="0"]
+transform = Transform3D(1.438, 0, 0, 0, 1.438, 0, 0, 0, 1.438, 0, 0.8716245, 0)
+shape = SubResource("BoxShape3D_m8580")
+
+[node name="patas" type="MeshInstance3D" parent="." index="1"]
+transform = Transform3D(1.438, 0, 0, 0, 1.438, 0, 0, 0, 1.438, 0, 0.4344703, 0)
+mesh = SubResource("CylinderMesh_sema4")
+skeleton = NodePath("../MeshInstance3D")
+surface_material_override/0 = SubResource("StandardMaterial3D_c04xl")
+
+[node name="CollisionShape3D2" type="CollisionShape3D" parent="." index="2"]
+transform = Transform3D(1.438, 0, 0, 0, 1.438, 0, 0, 0, 1.438, 0, 0.4344703, 0)
+shape = SubResource("CylinderShape3D_444eu")
+
+[node name="MeshInstance3D" parent="." index="3"]
+transform = Transform3D(1.438, 0, 0, 0, 1.438, 0, 0, 0, 1.438, 0, 0.8716245, 0)
+mesh = SubResource("BoxMesh_dh1fv")
+surface_material_override/0 = SubResource("StandardMaterial3D_pgpyi")

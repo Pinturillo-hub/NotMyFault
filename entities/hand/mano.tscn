@@ -3,8 +3,8 @@
 [ext_resource type="Script" uid="uid://bk4750ykuku3h" path="res://entities/hand/mano.gd" id="1_mymug"]
 
 [sub_resource type="SphereMesh" id="SphereMesh_0bdl3"]
-radius = 0.1
-height = 0.2
+radius = 0.08
+height = 0.16
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_1c313"]
 transparency = 1
@@ -16,7 +16,6 @@ proximity_fade_distance = 0.2
 script = ExtResource("1_mymug")
 
 [node name="MeshMano" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.4, -0.3, -0.6)
 mesh = SubResource("SphereMesh_0bdl3")
 surface_material_override/0 = SubResource("StandardMaterial3D_1c313")
 

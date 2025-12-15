@@ -24,8 +24,10 @@ material_limpio = SubResource("StandardMaterial3D_t0vq0")
 material_sellado = null
 
 [node name="CollisionShape3D" parent="." index="0"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.04032787, 0)
 shape = SubResource("BoxShape3D_4d7r4")
 
 [node name="MeshInstance3D" parent="." index="1"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.009020619, 0)
 mesh = SubResource("BoxMesh_b484l")
 surface_material_override/0 = SubResource("StandardMaterial3D_b484l")
