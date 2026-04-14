@@ -1,62 +1,77 @@
+## ControladorTiempo — Authoritative workday clock.
+##
+## The server ticks the clock. Clients receive tiempo_restante via
+## MultiplayerSynchronizer. When the clock reaches zero, GameManager is
+## notified to evaluate the end-of-day result.
 extends Node3D
-class_name ControladorTiempo # <--- Nombre único para evitar conflictos
+class_name ControladorTiempo
 
-# --- CONFIGURACIÓN ---
-@export var duracion_jornada: float = 180.0 # 3 minutos por defecto
-@export var boss_manager: BossManager # Referencia al script del Jefe (opcional)
+# ---------------------------------------------------------------------------
+# Exports
+# ---------------------------------------------------------------------------
+@export var duracion_jornada: float = 180.0  # seconds (3 minutes default)
 
-# --- ESTADO SINCRONIZADO ---
-# Añade estas variables al MultiplayerSynchronizer
+# ---------------------------------------------------------------------------
+# Synchronized state
+# ---------------------------------------------------------------------------
 @export var tiempo_restante: float = 180.0
 @export var jornada_iniciada: bool = false
 
+# ---------------------------------------------------------------------------
+# Signals
+# ---------------------------------------------------------------------------
+signal jornada_terminada
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
 func _ready() -> void:
-	# Añadimos este nodo al grupo para que el reloj lo encuentre fácil
 	add_to_group("proveedor_tiempo")
-	
-	if multiplayer.is_server():
-		tiempo_restante = duracion_jornada
-		set_process(true)
-	else:
-		set_process(false) # Los clientes solo leen los datos sincronizados, no calculan
+	tiempo_restante = duracion_jornada
+	# Server drives the clock; clients read the synchronized value
+	set_process(multiplayer.is_server())
 
 func _process(delta: float) -> void:
-	# El tiempo solo corre si la jornada ha empezado
-	if not jornada_iniciada: return
-	
+	if not jornada_iniciada:
+		return
 	tiempo_restante -= delta
-	
 	if tiempo_restante <= 0.0:
-		_finalizar_jornada()
+		tiempo_restante = 0.0
+		jornada_iniciada = false
+		set_process(false)
+		_on_end_of_day()
 
-# --- LÓGICA DE CONTROL ---
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
+## Start the workday. Server-authoritative; clients call via RPC.
 func intentar_fichar_entrada() -> void:
-	# Solo el servidor decide si empieza
 	if multiplayer.is_server():
-		if not jornada_iniciada and tiempo_restante > 0:
-			jornada_iniciada = true
-			print("[RELOJ] ¡Jornada iniciada! A trabajar.")
-			rpc("notificar_inicio_jornada")
+		_server_start_day()
 	else:
-		rpc_id(1, "servidor_fichar_entrada") # Petición al server
+		rpc_id(1, "_rpc_request_start")
 
-@rpc("any_peer", "call_local")
-func servidor_fichar_entrada():
+@rpc("any_peer", "reliable")
+func _rpc_request_start() -> void:
 	if multiplayer.is_server():
-		intentar_fichar_entrada()
+		_server_start_day()
 
-@rpc("authority", "call_local")
-func notificar_inicio_jornada():
-	# Aquí podrías disparar un sonido global de sirena/timbre
-	pass
+func _server_start_day() -> void:
+	if jornada_iniciada or tiempo_restante <= 0.0:
+		return
+	jornada_iniciada = true
+	_notify_day_started.rpc()
 
-func _finalizar_jornada() -> void:
-	jornada_iniciada = false
-	tiempo_restante = 0.0
-	print("[RELOJ] FIN DE JORNADA. CORTE A NEGRO.")
-	
-	# Llamar a la victoria en el BossManager
-	if boss_manager:
-		if boss_manager.has_method("evaluar_fin_jornada_victoria"):
-			boss_manager.rpc("evaluar_fin_jornada_victoria")
+@rpc("authority", "call_local", "reliable")
+func _notify_day_started() -> void:
+	pass  # Clients react to jornada_iniciada sync; hook audio/visuals here
+
+# ---------------------------------------------------------------------------
+# End of day
+# ---------------------------------------------------------------------------
+
+func _on_end_of_day() -> void:
+	jornada_terminada.emit()
+	GameManager.trigger_end_of_day()

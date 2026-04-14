@@ -3,16 +3,16 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cdjhvlhh2vtld"
-path.etc2="res://.godot/imported/paleta_juego.png-2fe5f04877f64c4e9f247bcb4b437384.etc2.ctex"
+path.s3tc="res://.godot/imported/paleta_juego.png-2fe5f04877f64c4e9f247bcb4b437384.s3tc.ctex"
 metadata={
-"imported_formats": ["etc2_astc"],
+"imported_formats": ["s3tc_bptc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://assets/materials/paleta_juego.png"
-dest_files=["res://.godot/imported/paleta_juego.png-2fe5f04877f64c4e9f247bcb4b437384.etc2.ctex"]
+dest_files=["res://.godot/imported/paleta_juego.png-2fe5f04877f64c4e9f247bcb4b437384.s3tc.ctex"]
 
 [params]
 

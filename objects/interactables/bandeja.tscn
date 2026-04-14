@@ -1,6 +1,7 @@
 [gd_scene load_steps=5 format=3 uid="uid://gy3jqerbt7da"]
 
-[ext_resource type="Script" uid="uid://cnaq78sf1ku7s" path="res://objects/interactables/bandeja.gd" id="1_lj2be"]
+[ext_resource type="Script" path="res://objects/interactables/bandeja_entrada.gd" id="1_entrada"]
+[ext_resource type="Script" path="res://objects/interactables/bandeja_salida.gd" id="2_salida"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_s7xps"]
 size = Vector3(0.764, 0.117, 1)
@@ -13,7 +14,7 @@ size = Vector3(0.738, 0.271, 0.987)
 
 [node name="Bandeja" type="StaticBody3D" node_paths=PackedStringArray("mesh_bandeja")]
 collision_mask = 5
-script = ExtResource("1_lj2be")
+script = ExtResource("1_entrada")
 mesh_bandeja = NodePath("MeshInstance3D")
 
 [node name="PuntoSpawn" type="Marker3D" parent="."]
@@ -33,9 +34,20 @@ autostart = true
 _spawnable_scenes = PackedStringArray("uid://eb3mgjibxhjq")
 spawn_path = NodePath("..")
 
-[node name="DetectorSalida" type="Area3D" parent="."]
+[node name="BandejaSalida" type="StaticBody3D" parent="." node_paths=PackedStringArray("mesh_bandeja")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.771, 0, 0)
+script = ExtResource("2_salida")
+mesh_bandeja = NodePath("MeshInstance3D")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="BandejaSalida"]
+mesh = SubResource("BoxMesh_s7xps")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="BandejaSalida"]
+shape = SubResource("BoxShape3D_lj2be")
+
+[node name="DetectorSalida" type="Area3D" parent="BandejaSalida"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.14511108, 0)
 collision_mask = 5
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="DetectorSalida"]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="BandejaSalida/DetectorSalida"]
 shape = SubResource("BoxShape3D_mucsy")

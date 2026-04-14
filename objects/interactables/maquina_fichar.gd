@@ -1,24 +1,20 @@
-extends Interactuable # <--- ¡Herencia mágica!
+## MaquinaFichar — Clock-in machine that starts the workday.
+extends Interactuable
 
-@export var sistema_tiempo: ControladorTiempo
+# ---------------------------------------------------------------------------
+# Node reference — assign in Inspector or auto-discovered at runtime
+# ---------------------------------------------------------------------------
+@export var sistema_tiempo: ControladorTiempo = null
 
 func _ready() -> void:
-	# Búsqueda automática si se te olvida asignarlo en el inspector
-	if not sistema_tiempo:
-		sistema_tiempo = get_tree().current_scene.find_child("SistemaTiempo", true, false)
+	if sistema_tiempo == null:
+		sistema_tiempo = get_tree().get_first_node_in_group("proveedor_tiempo") as ControladorTiempo
+	if sistema_tiempo == null:
+		push_error("MaquinaFichar: ControladorTiempo not found.")
 
-# Sobrescribimos la función del padre
 func interactuar() -> void:
-	# 1. Llamamos a la lógica base (por si tienes señales conectadas en el padre)
-	super.interactuar() 
-	
-	# 2. Lógica específica de fichar
-	if sistema_tiempo:
-		if not sistema_tiempo.jornada_iniciada:
-			print("FICHANDO ENTRADA...")
-			# Animación o sonido aquí
-			sistema_tiempo.intentar_fichar_entrada()
-		else:
-			print("Ya has fichado, ¡a trabajar!")
-	else:
-		print("ERROR: No encuentro el SistemaTiempo")
+	super.interactuar()
+	if sistema_tiempo == null:
+		return
+	if not sistema_tiempo.jornada_iniciada:
+		sistema_tiempo.intentar_fichar_entrada()

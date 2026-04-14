@@ -3,9 +3,9 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bengaxjbg5aaw"
-path.etc2="res://.godot/imported/cocodrilo_paleta_juego.png-7bdc484a0cb050d2f4470fd612f15d42.etc2.ctex"
+path.s3tc="res://.godot/imported/cocodrilo_paleta_juego.png-7bdc484a0cb050d2f4470fd612f15d42.s3tc.ctex"
 metadata={
-"imported_formats": ["etc2_astc"],
+"imported_formats": ["s3tc_bptc"],
 "vram_texture": true
 }
 generator_parameters={
@@ -15,7 +15,7 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/models/cocodrilo_paleta_juego.png"
-dest_files=["res://.godot/imported/cocodrilo_paleta_juego.png-7bdc484a0cb050d2f4470fd612f15d42.etc2.ctex"]
+dest_files=["res://.godot/imported/cocodrilo_paleta_juego.png-7bdc484a0cb050d2f4470fd612f15d42.s3tc.ctex"]
 
 [params]
 

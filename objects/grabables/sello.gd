@@ -1,56 +1,74 @@
+## Sello — Rubber stamp that seals Documento objects on impact.
+## Uses an Area3D detector that activates briefly during the strike animation.
 extends ObjetoAgarrable
+class_name Sello
 
-@onready var detector: Area3D = $DetectorImpacto
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+const SEAL_COOLDOWN_MS: int = 500
 
-const COOLDOWN_MS: int = 500 
-var _ultimo_tiempo_sellado: int = 0
+# ---------------------------------------------------------------------------
+# Node references
+# ---------------------------------------------------------------------------
+@onready var _detector: Area3D = $DetectorImpacto
 
-func _ready():
+# ---------------------------------------------------------------------------
+# Private
+# ---------------------------------------------------------------------------
+var _ultimo_sellado_ms: int = 0
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
+func _ready() -> void:
 	super._ready()
-	if detector:
-		detector.monitoring = true
-		detector.body_entered.connect(_on_contacto)
+	if _detector:
+		_detector.monitoring = true
+		_detector.body_entered.connect(_on_body_entered)
+
+# ---------------------------------------------------------------------------
+# Overrides — toggle detector with grab state
+# ---------------------------------------------------------------------------
 
 @rpc("any_peer", "call_local", "reliable")
 func intentar_coger(solicitante_id: int) -> void:
 	super.intentar_coger(solicitante_id)
-	if detector:
-		# FIX: Usamos set_deferred para evitar errores de física
-		detector.set_deferred("monitoring", false)
+	if is_instance_valid(_detector):
+		_detector.set_deferred("monitoring", false)
 
 @rpc("any_peer", "call_local", "reliable")
 func intentar_soltar(solicitante_id: int, impulso: Vector3) -> void:
 	super.intentar_soltar(solicitante_id, impulso)
-	if detector:
-		detector.set_deferred("monitoring", true)
+	if is_instance_valid(_detector):
+		_detector.set_deferred("monitoring", true)
 
 @rpc("any_peer", "call_local")
-func usar_objeto():
-	super.usar_objeto() 
-	
-	if detector:
-		detector.set_deferred("monitoring", true)
-		
-		await get_tree().create_timer(0.4).timeout
-		
-		if id_sostenedor_1 != 0: 
-			detector.set_deferred("monitoring", false)
-
-func _on_contacto(cuerpo):
-	if not multiplayer.is_server(): return
-
-	var tiempo_actual = Time.get_ticks_msec()
-	if tiempo_actual - _ultimo_tiempo_sellado < COOLDOWN_MS:
+func usar_objeto() -> void:
+	super.usar_objeto()
+	if not is_instance_valid(_detector):
 		return
+	_detector.set_deferred("monitoring", true)
+	await get_tree().create_timer(0.4).timeout
+	# Only close the detector if we're still held after the animation
+	if id_sostenedor_1 != 0 and is_instance_valid(_detector):
+		_detector.set_deferred("monitoring", false)
 
-	if cuerpo is Documento:
-		if cuerpo.esta_sellado: return
+# ---------------------------------------------------------------------------
+# Collision
+# ---------------------------------------------------------------------------
 
-		cuerpo.marcar_como_sellado()
-		print("[SELLO] ¡Firmado uno!")
-		
-		_ultimo_tiempo_sellado = tiempo_actual
-		
-		if id_sostenedor_1 != 0 and detector:
-			# FIX: Aquí estaba el error crítico
-			detector.set_deferred("monitoring", false)
+func _on_body_entered(cuerpo: Node3D) -> void:
+	if not multiplayer.is_server():
+		return
+	var now := Time.get_ticks_msec()
+	if now - _ultimo_sellado_ms < SEAL_COOLDOWN_MS:
+		return
+	var doc := cuerpo as Documento
+	if doc == null or doc.esta_sellado:
+		return
+	doc.marcar_como_sellado()
+	_ultimo_sellado_ms = now
+	if id_sostenedor_1 != 0 and is_instance_valid(_detector):
+		_detector.set_deferred("monitoring", false)

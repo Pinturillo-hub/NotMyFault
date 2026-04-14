@@ -1,55 +1,64 @@
+## Documento — A signable office document.
+## Extends ObjetoAgarrable with a sealed/unsigned visual state.
 extends ObjetoAgarrable
 class_name Documento
 
-# --- SINCRONIZACIÓN ---
-@export var esta_sellado: bool = false
+# ---------------------------------------------------------------------------
+# Exports
+# ---------------------------------------------------------------------------
+@export var esta_sellado:      bool                = false
+@export var material_limpio:   StandardMaterial3D  = null
+@export var material_sellado:  StandardMaterial3D  = null
 
-# --- VISUALES (Opcionales, si no los pones, usará color por defecto) ---
-@export var material_limpio: StandardMaterial3D
-@export var material_sellado: StandardMaterial3D
+# ---------------------------------------------------------------------------
+# Node references
+# ---------------------------------------------------------------------------
+@onready var _mesh: MeshInstance3D = $MeshInstance3D
 
-# Referencia automática a la malla (asegúrate de que el documento tiene un MeshInstance3D hijo)
-@onready var mesh: MeshInstance3D = $MeshInstance3D 
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
 
-func _ready():
+func _ready() -> void:
 	super._ready()
-	actualizar_visual()
+	_refresh_visual()
 
-func marcar_como_sellado():
-	if esta_sellado: return
-	
-	esta_sellado = true
-	rpc("actualizar_visual_rpc", true)
-	print("[DOCUMENTO] He sido sellado. Cambiando visual...")
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
-@rpc("call_local", "reliable")
-func actualizar_visual_rpc(estado: bool):
-	esta_sellado = estado
-	actualizar_visual()
-
-func actualizar_visual():
-	# Si no encontramos la malla (quizás se llama diferente), buscamos el primer hijo MeshInstance3D
-	if not mesh:
-		var hijos = find_children("*", "MeshInstance3D")
-		if hijos.size() > 0:
-			mesh = hijos[0]
-		else:
-			printerr("[ERROR DOCUMENTO] No encuentro el nodo MeshInstance3D para cambiarle el color.")
-			return
-
+## Server-authoritative seal. Call only on the server.
+func marcar_como_sellado() -> void:
 	if esta_sellado:
-		if material_sellado:
-			# Opción A: Usar material asignado en inspector
-			mesh.set_surface_override_material(0, material_sellado)
-		else:
-			# Opción B (Fallback): Crear material VERDE al vuelo para debug
-			var mat_temp = StandardMaterial3D.new()
-			mat_temp.albedo_color = Color.GREEN
-			mesh.set_surface_override_material(0, mat_temp)
-			print("[DOCUMENTO] Aviso: No hay 'material_sellado' asignado. Usando color VERDE debug.")
+		return
+	_sync_seal.rpc(true)
+
+# ---------------------------------------------------------------------------
+# RPC
+# ---------------------------------------------------------------------------
+
+@rpc("authority", "call_local", "reliable")
+func _sync_seal(estado: bool) -> void:
+	esta_sellado = estado
+	_refresh_visual()
+
+# ---------------------------------------------------------------------------
+# Private
+# ---------------------------------------------------------------------------
+
+func _refresh_visual() -> void:
+	var mesh_node := _find_mesh()
+	if mesh_node == null:
+		return
+	if esta_sellado:
+		mesh_node.set_surface_override_material(0, material_sellado)
 	else:
-		if material_limpio:
-			mesh.set_surface_override_material(0, material_limpio)
-		else:
-			# Limpiar cualquier override para volver al color original del modelo
-			mesh.set_surface_override_material(0, null)
+		mesh_node.set_surface_override_material(0, material_limpio)
+
+func _find_mesh() -> MeshInstance3D:
+	if is_instance_valid(_mesh):
+		return _mesh
+	var found := find_children("*", "MeshInstance3D")
+	if found.size() > 0:
+		return found[0] as MeshInstance3D
+	return null
