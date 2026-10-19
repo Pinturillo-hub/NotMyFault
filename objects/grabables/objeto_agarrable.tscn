@@ -1,4 +1,4 @@
-[gd_scene load_steps=7 format=3 uid="uid://vxmgcjayd4hj"]
+[gd_scene format=3 uid="uid://vxmgcjayd4hj"]
 
 [ext_resource type="Script" uid="uid://ciimn8hwgt2kc" path="res://objects/grabables/objeto_agarrable.gd" id="1_bxo01"]
 
@@ -32,19 +32,18 @@ properties/5/path = NodePath(".:esta_reparado")
 properties/5/spawn = true
 properties/5/replication_mode = 1
 
-[node name="CajaPrueba" type="RigidBody3D"]
-mass = 0.5
+[node name="CajaPrueba" type="RigidBody3D" unique_id=208327183]
 physics_material_override = SubResource("PhysicsMaterial_xywc0")
 script = ExtResource("1_bxo01")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1074822514]
 shape = SubResource("BoxShape3D_xywc0")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=1683816614]
 mesh = SubResource("BoxMesh_gejyx")
 skeleton = NodePath("")
 surface_material_override/0 = SubResource("StandardMaterial3D_ubi47")
 
-[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="."]
+[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="." unique_id=2002214793]
 replication_config = SubResource("SceneReplicationConfig_bxo01")
 visibility_update_mode = 1

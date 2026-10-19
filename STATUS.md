@@ -6,6 +6,19 @@ Fase 1: Prototipo Core / Sandbox Local
 [x] Control 1ª persona básico con inercia (jugador.gd).
 [x] Copias remotas de Jugador congeladas (FREEZE_MODE_KINEMATIC) y animadas desde el delta de posición sincronizada (sin simular gravedad local en Jolt).
 [x] Manos físicas con Spring Joint (fuerza de muelle) desde el servidor (mano.gd, objeto_agarrable.gd).
+[x] Clases de peso (ObjetoAgarrable.Peso: LIGERO, MEDIO, PESADO) como única fuente de verdad. CONFIG_PESO define masa física, respuesta del muelle, gravedad al sostener, ralentización, multiplicador de lanzamiento, tirón máximo y tropiezo. No se usan kg por escena: la masa se deriva de la clase en _ready.
+[x] LIGERO (Documento, Sello, CajaRota): masa 0.8, sin ralentización, muelle normal, lanzamiento x1.3, nunca se rompe el agarre.
+[x] MEDIO (CajaPrueba): masa 5, ralentización 0.85, muelle 0.6, lanzamiento x0.6, nunca se rompe el agarre.
+[x] PESADO (Mesa2): masa 25, ralentización 0.5, gravedad activa mientras se sostiene y servo de arrastre (velocidad máx. 3.4 m/s) en _apply_drag(): se arrastra pero no se puede levantar. Lanzamiento x0.3.
+[x] Golpes por peso: se eliminaron las excepciones de colisión con todos los jugadores (solo queda la del portador). El impulso real depende de la masa de la clase y de la masa del jugador (70 kg), así un ligero apenas empuja, uno medio da un golpe moderado y uno pesado empuja fuerte.
+[x] Tirón roto (solo PESADO): Mano._comprobar_tiron() mide la distancia mano-punto de agarre; si supera tiron_max (1.2 m) tras 0.8 s de gracia, el objeto se suelta, la mano vuelve a reposo y Jugador.tropezar() aplica 3.5 m/s de lurch y 0.9 s sin control con frenado reducido.
+[x] Tropiezo con vuelco: Jugador.tropezar() ahora lanza un Tween que vuelca el modelo (~80º) y acompaña la cámara, con una fracción de caída y el resto para levantarse rápido (angulo_volcado, angulo_volcado_camara, roll_volcado, fraccion_caida exportados). Se deduplica si ambas manos detectan el tirón a la vez.
+[x] Tumbarse por impacto: ObjetoAgarrable activa contact_monitor y, si un objeto lanzado golpea a un jugador, el servidor compara la carga del lanzamiento con fuerza_tropiezo de la clase (ligero 90%, medio 50%, pesado 70%) y envía _rpc_tropiezo al cliente de la víctima. Cooldown 600 ms; el lanzador no se tumba a sí mismo.
+[x] Indicador de agarre: barra inferior central que se llena y pasa de verde a rojo según la tensión del agarre (distancia/tiron_max) de los objetos que pueden romperse (pesados), para avisar de lo cerca que se está de tropezar.
+[x] Al caer se sueltan las manos: Jugador._soltar_manos() hace soltar a cualquiera de las dos manos lo que sujeten cuando tropezar() se dispara (tirón roto o impacto).
+[x] Agarre a dos manos sobre el mismo objeto: el segundo intentar_coger() del mismo jugador activa agarre_doble (sin forcejeo) y multiplica el muelle/arrastre por FUERZA_DOS_MANOS (1.8) y la ralentización por BONUS_DOS_MANOS (1.4, tope 1.0). Solo la mano derecha envía objetivos físicos cuando ambas sujetan lo mismo.
+[x] Lanzamiento por peso: Mano.soltar() trata velocidad_lanzamiento (4..12 m/s) como velocidad objetivo y la convierte en impulso (velocidad * masa * factor de clase), de modo que los ligeros vuelan rápido y los pesados apenas salen.
+[x] Bolsillo y Cambiazo: los objetos PESADOS no se pueden guardar en el bolsillo ("Demasiado pesado...") ni usar para un Cambiazo (se valida en servidor).
 [x] Sistema de lanzamiento de objetos (barra de carga visual).
 [x] Modo fantasma para colocación precisa (Tecla E).
 [x] Lógica de forcejeo (Tug-of-War) entre dos jugadores.
@@ -40,8 +53,11 @@ Fase 1: Prototipo Core / Sandbox Local
 
 6. Sistema de Sala de Juntas (Teléfono Rojo)
 [x] Teléfono Rojo funcional: escena objects/interactables/telefono_rojo.tscn (StaticBody3D + MeshInstance3D + CollisionShape3D, script Interactuable) instanciada en sandbox.tscn. Al interactuar en Phase.WORKING inicia GameManager.start_voting() y abre el VotingUI.
-[ ] Exigir activación simultánea por 2 jugadores distintos.
-[ ] Implementar fase de Votación (Phase.BOARDROOM_VOTING) de 45 segundos con teletransporte de jugadores. (45 s y votación ya implementados; falta el teletransporte a la Sala de Juntas).
+[x] Exigir activación simultánea por 2 jugadores distintos: TelefonoRojo acumula _activaciones (peer_id → ticks) y solo llama a start_voting() cuando 2 ids distintos pulsan dentro de VENTANA_ACTIVACION = 3 s. Label3D "1/2" sincronizado con _rpc_set_estado y Timer de ventana que reinicia el contador.
+[x] Implementar fase de Votación (Phase.BOARDROOM_VOTING) de 45 segundos con teletransporte de jugadores: al arrancar la reunión GameManager guarda las posiciones previas y reparte a los jugadores en un círculo de 2.2 m alrededor del nodo SalaJuntas (grupo "sala_juntas" + PuntoCentro, con mesa y cartel en sandbox.tscn). Si la reunión es inconcluyente los devuelve a su sitio. Reabrir la papeleta con la tecla V durante la reunión.
+[x] Bloquear el movimiento WASD durante toda la reunión (Jugador._process pone _dir_input a ZERO en Phase.BOARDROOM_VOTING) y mostrar un contador de 45 s arriba en el centro que crece y se tiñe de rojo al acercarse a 0 (Label "Contador" en VotingUI, alimentado por GameManager.voting_time_left, que ahora decrementa en todos los peers; solo el servidor resuelve).
+[x] Auto-voto al agotarse el tiempo: _resolve_vote() rellena con el propio id el voto de quien no votó ("el voto va contra ti mismo") antes de contar.
+[x] Feedback provisional al resolver la votación: _broadcast_end/_broadcast_resultado muestran un cartel grande con el veredicto (VOTE_CORRECT/VOTE_WRONG y también el resto de finales) en placeholders; la reunión inconcluyente muestra "REUNIÓN INCONCLUYENTE" durante 2.5 s antes de devolver a la oficina.
 [x] Implementar lógica de Mayoría Cualificada ($\ge 50\%$), empates/dispersión -> "Reunión Inconcluyente" (+25% Ira, teléfono roto).
 
 7. Correcciones de Red para Partidas con Varios Clientes
@@ -55,6 +71,8 @@ Fase 1: Prototipo Core / Sandbox Local
 [x] Corregir la extracción del bolsillo: se emite salir_de_bolsillo antes de intentar_coger para teletransportar el objeto fuera del limbo, evitando que el muelle lo arrastre ~200 m y que la mano desaparezca por el timeout.
 [x] Limpiar las excepciones de colisión del portador anterior al entrar en el bolsillo (objeto_agarrable.gd).
 [x] Al colocar un objeto en el suelo (modo fantasma), liberar también el agarre en el servidor con intentar_soltar para que no quede marcado como sostenido (mano.gd).
+[x] Corregir el crash de la tecla E al colocar un objeto ("Invalid assignment of property 'global_rotation' ... on a base object of type 'Nil'", mano.gd): _broadcast_state() es call_local y, al soltar, emite disputa_finalizada de forma sincrónica en el host, lo que deja objeto_agarrado = null. _execute_placement() ahora guarda una referencia local (var obj) antes de los RPCs.
+[x] Corregir el teletransporte a la Sala de Juntas: separar Jugador.teleport_to() (llamada local del host) del RPC _rpc_teleport_to_boardroom (clientes, valida sender == 1), porque al invocar la función @rpc directamente desde el contexto de la RPC de un cliente get_remote_sender_id() devuelve el id de ese cliente y la rechazaba. Además el desplazamiento se aplica en _integrate_forces (no asignando global_position), para que el servidor de físicas no lo sobrescriba.
 
 Fase 2: Multijugador y Sistema de Roles (Próximamente)
 [ ] Implementar NetworkManager Autoload (GodotSteam, P2P Relay).

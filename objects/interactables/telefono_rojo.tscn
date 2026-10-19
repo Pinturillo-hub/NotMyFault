@@ -1,25 +1,16 @@
-[gd_scene load_steps=4 format=3 uid="uid://s6f8lew21qk2"]
+[gd_scene format=3 uid="uid://s6f8lew21qk2"]
 
 [ext_resource type="Script" uid="uid://6124xdvjd2pp" path="res://objects/interactables/telefono_rojo.gd" id="1_ygrjc"]
+[ext_resource type="PackedScene" uid="uid://cu2q2qyy6qni2" path="res://assets/models/telefono.glb" id="2_6red4"]
 
-[sub_resource type="CylinderMesh" id="CylinderMesh_601y4"]
-height = 0.6
+[sub_resource type="BoxShape3D" id="BoxShape3D_4dscp"]
+size = Vector3(0.48535156, 0.205, 0.32177734)
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_phone"]
-albedo_color = Color(0.72, 0.04, 0.04, 1)
-metallic = 0.15
-roughness = 0.35
-
-[sub_resource type="CylinderShape3D" id="CylinderShape3D_601y4"]
-height = 0.6
-
-[node name="TelefonoRojo" type="StaticBody3D"]
-collision_layer = 1
+[node name="TelefonoRojo" type="StaticBody3D" unique_id=1027496388]
 script = ExtResource("1_ygrjc")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
-mesh = SubResource("CylinderMesh_601y4")
-surface_material_override/0 = SubResource("StandardMaterial3D_phone")
+[node name="Sketchfab_Scene" parent="." unique_id=187361842 instance=ExtResource("2_6red4")]
+transform = Transform3D(0.125, 0, 0, 0, 0.125, 0, 0, 0, 0.125, 0, -0.09917331, 0)
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
-shape = SubResource("CylinderShape3D_601y4")
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=2135241214]
+shape = SubResource("BoxShape3D_4dscp")

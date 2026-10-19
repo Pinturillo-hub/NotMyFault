@@ -51,6 +51,8 @@ enum GameResult {
 var _votes: Dictionary = {}                 # voter_id (int) → target_id (int)
 var _voting_resolved: bool = false
 var _vote_target_id: int = -1
+## Pre-vote transforms, used to send players back if the meeting is inconclusive.
+var _posiciones_antes_votacion: Dictionary = {}
 
 # ---------------------------------------------------------------------------
 # Lifecycle
@@ -63,14 +65,16 @@ func _ready() -> void:
 	set_process(true)
 
 func _process(delta: float) -> void:
-	if not es_servidor_activo():
-		return
 	if current_phase != Phase.BOARDROOM_VOTING:
 		return
 	if _voting_resolved:
 		return
 
+	# All peers count down locally so every client HUD shows the same timer;
+	# only the server resolves when it reaches 0.
 	voting_time_left = maxf(voting_time_left - delta, 0.0)
+	if not es_servidor_activo():
+		return
 	if voting_time_left <= 0.0:
 		_resolve_vote()
 
@@ -128,6 +132,8 @@ func start_voting() -> void:
 	_voting_resolved = false
 	voting_active = true
 	voting_time_left = VOTING_DURATION
+	_guardar_posiciones_antes_de_votar()
+	_teleportar_jugadores_a_sala_juntas()
 	current_phase = Phase.BOARDROOM_VOTING
 	_broadcast_voting_started.rpc(VOTING_DURATION)
 
@@ -168,6 +174,76 @@ func _get_liability_id() -> int:
 	return -1
 
 # ---------------------------------------------------------------------------
+# Boardroom teleport
+# ---------------------------------------------------------------------------
+
+func _guardar_posiciones_antes_de_votar() -> void:
+	_posiciones_antes_votacion.clear()
+	for p in get_tree().get_nodes_in_group("jugadores"):
+		var id := p.name.to_int()
+		var nodo := p as Node3D
+		_posiciones_antes_votacion[id] = {
+			"pos": nodo.global_position,
+			"yaw": nodo.global_rotation.y,
+		}
+
+func _teleportar_jugadores_a_sala_juntas() -> void:
+	var sala := get_tree().get_first_node_in_group("sala_juntas")
+	if sala == null:
+		push_warning("GameManager: no se encontró ningún nodo en el grupo 'sala_juntas'.")
+		return
+
+	var centro_nodo := sala.get_node_or_null("PuntoCentro") as Node3D
+	var centro: Vector3 = (
+		centro_nodo.global_position
+		if centro_nodo != null
+		else (sala as Node3D).global_position
+	)
+
+	var ids: Array[int] = []
+	for p in get_tree().get_nodes_in_group("jugadores"):
+		ids.append(p.name.to_int())
+	ids.sort()
+	var total := ids.size()
+	if total == 0:
+		return
+
+	# Place players evenly on a circle around the table, facing its centre.
+	for i in total:
+		var angulo := TAU * float(i) / float(total)
+		var pos := centro + Vector3(cos(angulo), 0.0, sin(angulo)) * 2.2
+		var yaw := atan2(-(centro.x - pos.x), -(centro.z - pos.z))
+		var jugador := _find_player_node(ids[i])
+		if jugador == null:
+			continue
+		if ids[i] == multiplayer.get_unique_id() and multiplayer.is_server():
+			jugador.call("teleport_to", pos, yaw)
+		else:
+			jugador.rpc_id(ids[i], "_rpc_teleport_to_boardroom", pos, yaw)
+
+func _devolver_jugadores_desde_sala_juntas() -> void:
+	if _posiciones_antes_votacion.is_empty():
+		return
+	for p in get_tree().get_nodes_in_group("jugadores"):
+		var id := p.name.to_int()
+		if not _posiciones_antes_votacion.has(id):
+			continue
+		var datos: Dictionary = _posiciones_antes_votacion[id]
+		var pos: Vector3 = datos["pos"]
+		var yaw: float = datos["yaw"]
+		if id == multiplayer.get_unique_id() and multiplayer.is_server():
+			p.call("teleport_to", pos, yaw)
+		else:
+			p.rpc_id(id, "_rpc_teleport_to_boardroom", pos, yaw)
+	_posiciones_antes_votacion.clear()
+
+func _find_player_node(id: int) -> Node:
+	for p in get_tree().get_nodes_in_group("jugadores"):
+		if p.name.to_int() == id:
+			return p
+	return null
+
+# ---------------------------------------------------------------------------
 # Voting resolution (Qualified Majority)
 # ---------------------------------------------------------------------------
 
@@ -180,6 +256,12 @@ func _resolve_vote() -> void:
 	_voting_resolved = true
 	voting_active = false
 	voting_time_left = 0.0
+
+	# Whoever did not vote in time has their vote turned against themselves.
+	if _votes.size() < roles.size():
+		for voter_id in roles:
+			if not _votes.has(voter_id):
+				_votes[voter_id] = voter_id
 
 	var total_voters := roles.size()
 	var required := int(ceil(float(total_voters) * 0.5))
@@ -216,9 +298,14 @@ func _resolve_inconclusive_vote() -> void:
 	_vote_target_id = -1
 	voting_active = false
 	voting_time_left = 0.0
-	_voting_resolved = false
+
+	# Provisional reveal: show the verdict briefly before returning to work.
+	# _voting_resolved stays true so _process does not resolve again during it.
+	_broadcast_resultado.rpc("🕊️ REUNIÓN INCONCLUYENTE\nNo hay mayoría clara.\n¡El Jefe está furioso!")
+	await get_tree().create_timer(2.5).timeout
 
 	# Everyone returns to work, the Boss is angered and the phone breaks.
+	_devolver_jugadores_desde_sala_juntas()
 	_broadcast_vote_inconclusive.rpc()
 
 	var boss := get_tree().get_first_node_in_group("boss_manager")
@@ -336,6 +423,7 @@ func _get_object_holder_id(obj: Node) -> int:
 func _end_game(result: GameResult) -> void:
 	voting_active = false
 	voting_time_left = 0.0
+	_posiciones_antes_votacion.clear()
 	current_phase = Phase.ENDED
 	_broadcast_end.rpc(result)
 
@@ -387,10 +475,40 @@ func _broadcast_end(result: GameResult) -> void:
 	current_phase = Phase.ENDED
 	voting_active = false
 	voting_time_left = 0.0
+	# Provisional end feedback: show the verdict instead of closing the HUD.
 	var ui := get_tree().get_first_node_in_group("voting_ui")
-	if ui and ui.has_method("cerrar_ui"):
-		ui.cerrar_ui()
+	if ui and ui.has_method("mostrar_resultado"):
+		ui.mostrar_resultado(_resultado_texto(result))
 	game_ended.emit(result)
+
+## Shows a provisional result banner on every peer (used before a non-final
+## transition such as an inconclusive meeting).
+@rpc("authority", "call_local", "reliable")
+func _broadcast_resultado(mensaje: String) -> void:
+	var ui := get_tree().get_first_node_in_group("voting_ui")
+	if ui and ui.has_method("mostrar_resultado"):
+		ui.mostrar_resultado(mensaje)
+
+## Provisional Spanish text for each ending. Placeholder until real end screens.
+func _resultado_texto(result: GameResult) -> String:
+	match result:
+		GameResult.VOTE_CORRECT:
+			return "✅ HABÉIS DESPEDIDO AL TORPE\n¡Ganáis los inocentes!"
+		GameResult.VOTE_WRONG:
+			return "❌ HABÉIS DESPEDIDO A UN INOCENTE\n¡Gana el Torpe!"
+		GameResult.LIABILITY_REPAIRED:
+			return "🕵️ EL TORPE LO ARREGLÓ A TIEMPO\n¡Gana el Torpe!"
+		GameResult.INNOCENTS_SURVIVED:
+			return "☀️ FIN DE JORNADA\nEl objeto sigue roto: ganan los inocentes."
+		GameResult.BOSS_CAUGHT_INNOCENT:
+			return "😱 EL JEFE PILLÓ A UN INOCENTE\n¡Gana el Torpe!"
+		GameResult.BOSS_CAUGHT_LIABILITY:
+			return "🚨 EL JEFE PILLÓ AL TORPE\n¡Ganáis los inocentes!"
+		GameResult.BOSS_FOUND_OBJECT_FLOOR:
+			return "💥 OBJETO ROTO EN EL SUELO\n¡Pierde todo el mundo!"
+		GameResult.BOSS_FOUND_REPAIRED_ON_LIABILITY:
+			return "💥 EL TORPE LO LLEVABA ENCIMA\n¡Pierde todo el mundo!"
+	return "FIN DE LA PARTIDA"
 
 @rpc("authority", "call_local", "reliable")
 func _end_game_false_alarm() -> void:

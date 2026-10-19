@@ -13,6 +13,10 @@ class_name Jugador
 # ---------------------------------------------------------------------------
 enum AccionEspalda { NINGUNA, CAMBIAZO, INSPECCION }
 
+const VELOCIDAD_TROPIEZO: float = 3.5
+## Two-handed carry lightens the slowdown (multiplies the class factor).
+const BONUS_DOS_MANOS: float = 1.4
+
 # ---------------------------------------------------------------------------
 # Exports
 # ---------------------------------------------------------------------------
@@ -26,6 +30,14 @@ enum AccionEspalda { NINGUNA, CAMBIAZO, INSPECCION }
 
 @export_group("Gameplay")
 @export var tiempo_para_cambiazo: float = 1.5   # GDD spec: 1.5 s hold to steal
+
+@export_group("Tropiezo")
+## How far the model tips over and how much the camera follows it (degrees).
+@export var angulo_volcado:         float = 80.0
+@export var angulo_volcado_camara:  float = -50.0
+@export var roll_volcado:           float = 18.0
+## Fraction of the stumble spent falling; the rest is spent getting up.
+@export_range(0.05, 0.9) var fraccion_caida: float = 0.3
 
 # ---------------------------------------------------------------------------
 # Node references — resolved in _ready
@@ -55,6 +67,14 @@ var _rot_objetivo_y:    float   = 0.0
 var _dir_input:         Vector3 = Vector3.ZERO
 var _altura_base_viz:   float   = 0.0
 var _objeto_en_bolsillo: ObjetoAgarrable = null
+## Remaining stumble time. While > 0 the player cannot steer and brakes slowly.
+var _tiempo_tropiezo:   float   = 0.0
+## Visual tip-over driven by _animar_volcado while the stumble lasts.
+var _volcando:          bool    = false
+var _tween_volcado:     Tween   = null
+var _volcado_pitch:     float   = 0.0
+var _volcado_pitch_cam: float   = 0.0
+var _volcado_roll:      float   = 0.0
 
 # Steal / inspection progress
 var _timer_cambiazo:   float        = 0.0
@@ -67,6 +87,10 @@ var _accion_espalda:   int          = AccionEspalda.NINGUNA
 var _label_pista: Label = null
 var _tiempo_pista: float = 0.0
 
+# Grip-tension warning bar (local only)
+var _barra_tension: ProgressBar = null
+var _estilo_tension: StyleBoxFlat = null
+
 # Debug-only local role indicator (never replicated, hidden in release builds)
 var _label_rol: Label = null
 
@@ -74,6 +98,13 @@ var _label_rol: Label = null
 var _pos_visual_anterior: Vector3 = Vector3.ZERO
 var _vel_visual_remota: Vector3 = Vector3.ZERO
 var _tiene_pos_visual_anterior: bool = false
+
+# Pending teleport applied inside _integrate_forces. Directly assigning
+# global_position on an active RigidBody3D can be overwritten by the physics
+# server, so the displacement is committed during the physics step instead.
+var _teleport_pendiente: bool = false
+var _teleport_pos: Vector3 = Vector3.ZERO
+var _teleport_yaw: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Multiplayer authority setup
@@ -110,12 +141,16 @@ func _setup_local_player() -> void:
 	_mano_der.barra_carga_ui  = _barra_der
 	_mano_izq.barra_carga_ui  = _barra_izq
 	_mano_izq.es_mano_izquierda = true
+	# Each hand can see the other: used for the two-handed grip.
+	_mano_der.mano_companera = _mano_izq
+	_mano_izq.mano_companera = _mano_der
 
 	_set_visual_layer(2)   # Local player renders to layer 2 (excluded from own camera)
 	_crear_barra_cambiazo()
 	_crear_label_pista()
 	_crear_label_rol()
 	_crear_back_cast()
+	_crear_barra_tension()
 
 func _setup_remote_player() -> void:
 	_camara.current = false
@@ -144,6 +179,15 @@ func _input(event: InputEvent) -> void:
 			else Input.MOUSE_MODE_CAPTURED
 		)
 
+	# During the Boardroom meeting the player is far from the red phone, so V
+	# re-opens the ballot locally even while the mouse is visible.
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_V:
+		if GameManager.current_phase == GameManager.Phase.BOARDROOM_VOTING:
+			var telefono := get_tree().get_first_node_in_group("telefono_rojo")
+			if telefono and telefono.has_method("abrir_ui_local"):
+				telefono.abrir_ui_local(multiplayer.get_unique_id())
+		return
+
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		return
 
@@ -157,6 +201,8 @@ func _input(event: InputEvent) -> void:
 	_handle_hand_input(event, "mano_izquierda_accion", _mano_izq, looking_down, ray_info)
 
 func _process_look(event: InputEventMouseMotion) -> void:
+	if _volcando:
+		return  # The tip-over tween owns the camera while falling.
 	_cabeza.rotate_x(-event.relative.y * sensibilidad_raton)
 	_cabeza.rotation.x = clamp(_cabeza.rotation.x, deg_to_rad(-90.0), deg_to_rad(80.0))
 	_rot_objetivo_y -= event.relative.x * sensibilidad_raton
@@ -214,11 +260,20 @@ func _process(delta: float) -> void:
 		_animate_remote_player(delta)
 		return
 
-	var input_vec := Input.get_vector("izquierda", "derecha", "adelante", "atras")
-	_dir_input     = Vector3(input_vec.x, 0.0, input_vec.y).normalized()
+	_tiempo_tropiezo = maxf(_tiempo_tropiezo - delta, 0.0)
+
+	# Movement is frozen for the whole Boardroom meeting (vote + discussion)
+	# and while recovering from a stumble.
+	if GameManager.current_phase == GameManager.Phase.BOARDROOM_VOTING or _tiempo_tropiezo > 0.0:
+		_dir_input = Vector3.ZERO
+	else:
+		var input_vec := Input.get_vector("izquierda", "derecha", "adelante", "atras")
+		_dir_input = Vector3(input_vec.x, 0.0, input_vec.y).normalized()
 	_process_steal_progress(delta)
 	_update_crosshair()
-	_animate_visuals(delta, linear_velocity)
+	_actualizar_barra_tension()
+	if not _volcando:
+		_animate_visuals(delta, linear_velocity)
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	# Only the authority peer drives its own body. Remote copies are frozen
@@ -226,13 +281,114 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 	if not is_multiplayer_authority():
 		return
 
+	if _teleport_pendiente:
+		var t := state.transform
+		t.origin = _teleport_pos
+		state.transform = t
+		state.linear_velocity = Vector3.ZERO
+		state.angular_velocity = Vector3.ZERO
+		_rot_objetivo_y = _teleport_yaw
+		_teleport_pendiente = false
+
 	var new_basis  := Basis(Vector3.UP, _rot_objetivo_y)
 	state.transform.basis = new_basis
 	var dir_world  := new_basis * _dir_input
 	var vel_h      := Vector2(state.linear_velocity.x, state.linear_velocity.z)
-	var target_h   := Vector2(dir_world.x, dir_world.z) * velocidad_maxima
-	vel_h           = vel_h.move_toward(target_h, aceleracion_tierra * state.step)
+	var target_h   := Vector2(dir_world.x, dir_world.z) * velocidad_maxima * _factor_carga()
+	# A stumble keeps the lurch alive: steering is locked and braking is weak.
+	var aceleracion := aceleracion_tierra * (0.15 if _tiempo_tropiezo > 0.0 else 1.0)
+	vel_h           = vel_h.move_toward(target_h, aceleracion * state.step)
 	state.linear_velocity = Vector3(vel_h.x, state.linear_velocity.y, vel_h.y)
+
+## Speed multiplier from the heaviest object currently in either hand.
+func _factor_carga() -> float:
+	var factor := 1.0
+	if _mano_der.objeto_agarrado != null:
+		factor = minf(factor, _mano_der.objeto_agarrado.factor_ralentizacion)
+	if _mano_izq.objeto_agarrado != null:
+		factor = minf(factor, _mano_izq.objeto_agarrado.factor_ralentizacion)
+	if _agarre_a_dos_manos():
+		factor = minf(1.0, factor * BONUS_DOS_MANOS)
+	return factor
+
+## True when both hands hold the same object.
+func _agarre_a_dos_manos() -> bool:
+	return _mano_der.objeto_agarrado != null and _mano_der.objeto_agarrado == _mano_izq.objeto_agarrado
+
+## Called by Mano when a heavy grip snaps, and by the server when a thrown
+## object knocks this player over. Only the local authority simulates its body,
+## so this is a local-only effect: the player tips over and gets back up.
+func tropezar(direccion: Vector3, duracion: float) -> void:
+	if not is_multiplayer_authority():
+		return
+	if _volcando:
+		return  # Already on the floor: a second hit must not stack the lurch.
+	# Going down means losing your grip: drop whatever either hand holds.
+	_soltar_manos()
+	_tiempo_tropiezo = maxf(_tiempo_tropiezo, duracion)
+	var dir := Vector3(direccion.x, 0.0, direccion.z)
+	if dir.is_zero_approx():
+		dir = -global_transform.basis.z
+	dir = dir.normalized()
+	linear_velocity += dir * VELOCIDAD_TROPIEZO
+	_animar_volcado(dir, duracion)
+
+func _soltar_manos() -> void:
+	var manos: Array[Mano] = [_mano_der, _mano_izq]
+	for mano: Mano in manos:
+		if mano.objeto_agarrado != null:
+			mano.soltar(false)
+
+## Tips the model and the camera over, then stands the player back up.
+func _animar_volcado(dir: Vector3, duracion: float) -> void:
+	if _visuales == null:
+		return
+	_volcando = true
+	# Fall away from the push (forward is -Z), roll to the side it came from.
+	var local := global_transform.basis.inverse() * dir
+	_volcado_pitch     = deg_to_rad(angulo_volcado) * signf(local.z)
+	_volcado_pitch_cam = deg_to_rad(angulo_volcado_camara) * -signf(local.z)
+	_volcado_roll      = deg_to_rad(roll_volcado) * -signf(local.x)
+	if _tween_volcado and _tween_volcado.is_valid():
+		_tween_volcado.kill()
+	_tween_volcado = create_tween()
+	_tween_volcado.tween_method(_aplicar_volcado, 0.0, 1.0, maxf(duracion, 0.2))
+	_tween_volcado.tween_callback(_terminar_volcado)
+
+## t goes 0 -> 1; the tip peaks at fraccion_caida and returns to 0 at 1.
+func _aplicar_volcado(t: float) -> void:
+	var caida: float
+	if t < fraccion_caida:
+		caida = t / fraccion_caida
+	else:
+		caida = 1.0 - (t - fraccion_caida) / (1.0 - fraccion_caida)
+	caida = clampf(caida, 0.0, 1.0)
+	if _visuales:
+		_visuales.rotation.x = _volcado_pitch * caida
+		_visuales.rotation.z = _volcado_roll  * caida
+	if _cabeza:
+		_cabeza.rotation.x = _volcado_pitch_cam * caida
+		_cabeza.rotation.z = _volcado_roll      * caida
+
+func _terminar_volcado() -> void:
+	_volcando = false
+	if _visuales:
+		_visuales.rotation.x = 0.0
+		_visuales.rotation.z = 0.0
+	if _cabeza:
+		_cabeza.rotation.x = 0.0
+		_cabeza.rotation.z = 0.0
+
+## Server -> victim's client. The victim owns its body, so only it plays the
+## fall; validate that the caller is the server (peer 1).
+@rpc("any_peer", "call_local", "reliable")
+func _rpc_tropiezo(direccion: Vector3, duracion: float) -> void:
+	if not is_multiplayer_authority():
+		return
+	var emisor := multiplayer.get_remote_sender_id()
+	if emisor != 0 and emisor != 1:
+		return
+	tropezar(direccion, duracion)
 
 # ---------------------------------------------------------------------------
 # Pocket system
@@ -242,6 +398,9 @@ func _handle_pocket_action(mano: Mano) -> void:
 	if mano.objeto_agarrado != null:
 		# Put held object into pocket
 		var obj := mano.objeto_agarrado
+		if not obj.se_puede_guardar():
+			_mostrar_pista("Demasiado pesado para guardarlo en el bolsillo.")
+			return
 		mano.soltar(false)
 		if _objeto_en_bolsillo != null:
 			_sacar_de_bolsillo(true, mano)
@@ -368,6 +527,9 @@ func _server_process_steal(
 	# The object the thief claims to hold must actually belong to them.
 	if obj_entrante != null and obj_entrante.id_sostenedor_1 != id_ladron:
 		obj_entrante = null
+	# A heavy prop cannot be swapped into a pocket, so the Cambiazo fails.
+	if obj_entrante != null and not obj_entrante.se_puede_guardar():
+		return
 
 	var ladron    := _find_player_by_id(id_ladron)
 	if ladron != null and ladron.global_position.distance_to(victima.global_position) > 3.5:
@@ -465,6 +627,35 @@ func _rpc_assign_pocket_object(ruta: NodePath) -> void:
 func _rpc_clear_pocket() -> void:
 	_objeto_en_bolsillo = null
 	_sync_bulto.rpc(false)
+
+## Server-driven teleport used by the Boardroom vote. The server is not the
+## authority of a client's player, so this must accept "any_peer" and validate
+## that the caller is peer 1 (or a local call on the host).
+## Commits a teleport on the authority peer. Called directly for the host's own
+## player and from the network RPC for clients. The displacement is applied in
+## _integrate_forces so the physics server does not discard it.
+func teleport_to(pos: Vector3, yaw: float) -> void:
+	if not is_multiplayer_authority():
+		return
+	_teleport_pos = pos
+	_teleport_yaw = yaw
+	_teleport_pendiente = true
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	_rot_objetivo_y = yaw
+	if _cabeza != null:
+		_cabeza.rotation.x = 0.0
+	if has_method("reset_physics_interpolation"):
+		reset_physics_interpolation()
+
+## Server-driven teleport used by the Boardroom vote. The server is not the
+## authority of a client's player, so this must accept "any_peer" and validate
+## that the caller is peer 1.
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_teleport_to_boardroom(pos: Vector3, yaw: float) -> void:
+	if multiplayer.get_remote_sender_id() != 1:
+		return
+	teleport_to(pos, yaw)
 
 # ---------------------------------------------------------------------------
 # Gameplay queries
@@ -576,6 +767,45 @@ func _crear_barra_cambiazo() -> void:
 		_barra_cambiazo.show_percentage     = false
 		_barra_cambiazo.visible             = false
 		_barra_cambiazo.modulate            = Color(1.0, 0.5, 0.0)
+
+## Bottom-centre bar that fills as a held grip stretches towards snapping.
+func _crear_barra_tension() -> void:
+	if _barra_tension != null or not has_node("Interfaz"):
+		return
+	_barra_tension = ProgressBar.new()
+	_barra_tension.anchor_left   = 0.5
+	_barra_tension.anchor_right  = 0.5
+	_barra_tension.anchor_top    = 1.0
+	_barra_tension.anchor_bottom = 1.0
+	_barra_tension.offset_left   = -110.0
+	_barra_tension.offset_right  = 110.0
+	_barra_tension.offset_top    = -160.0
+	_barra_tension.offset_bottom = -146.0
+	_barra_tension.show_percentage = false
+	_barra_tension.visible = false
+	_estilo_tension = StyleBoxFlat.new()
+	_estilo_tension.bg_color = Color(0.4, 1.0, 0.4, 0.9)
+	_barra_tension.add_theme_stylebox_override("fill", _estilo_tension)
+	var fondo := StyleBoxFlat.new()
+	fondo.bg_color = Color(0.0, 0.0, 0.0, 0.45)
+	_barra_tension.add_theme_stylebox_override("background", fondo)
+	$Interfaz.add_child(_barra_tension)
+
+func _actualizar_barra_tension() -> void:
+	if _barra_tension == null:
+		return
+	var ratio := 0.0
+	var manos: Array[Mano] = [_mano_der, _mano_izq]
+	for mano: Mano in manos:
+		var obj := mano.objeto_agarrado
+		if obj != null and not is_inf(obj.tiron_max):
+			ratio = maxf(ratio, mano.tension_agarre)
+	_barra_tension.visible = ratio > 0.03
+	if not _barra_tension.visible:
+		return
+	_barra_tension.value = ratio * 100.0
+	if _estilo_tension:
+		_estilo_tension.bg_color = Color(0.4, 1.0, 0.4, 0.9).lerp(Color(1.0, 0.15, 0.15, 1.0), ratio)
 
 func _crear_label_pista() -> void:
 	if _label_pista != null or not has_node("Interfaz"):

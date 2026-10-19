@@ -11,20 +11,87 @@ extends RigidBody3D
 class_name ObjetoAgarrable
 
 # ---------------------------------------------------------------------------
+# Weight classes
+# ---------------------------------------------------------------------------
+## Gameplay weight class. This is the single source of truth for weight:
+## physical mass, spring response, carry slowdown, throw speed and grip
+## strength all come from CONFIG_PESO. To add a class, add the enum value and
+## a matching table entry.
+##
+## "fuerza_tropiezo" is the minimum throw charge (0..1) this class needs to
+## knock a player over on impact: light at 90%, medium at 50%, heavy at 70%.
+## "tropiezo" is how long the victim stays down.
+enum Peso { LIGERO, MEDIO, PESADO }
+
+const CONFIG_PESO: Dictionary = {
+	Peso.LIGERO: {
+		"masa": 0.8,
+		"muelle": 1.0,
+		"gravedad_sostenido": 0.0,
+		"arrastre": false,
+		"velocidad_arrastre": 0.0,
+		"aceleracion_arrastre": 0.0,
+		"ralentizacion": 1.0,
+		"lanzamiento": 1.3,
+		"tiron_max": INF,
+		"tropiezo": 0.7,
+		"fuerza_tropiezo": 0.9,
+	},
+	Peso.MEDIO: {
+		"masa": 5.0,
+		"muelle": 0.8,
+		"gravedad_sostenido": 0.0,
+		"arrastre": false,
+		"velocidad_arrastre": 0.0,
+		"aceleracion_arrastre": 0.0,
+		"ralentizacion": 0.85,
+		"lanzamiento": 0.6,
+		"tiron_max": INF,
+		"tropiezo": 0.85,
+		"fuerza_tropiezo": 0.5,
+	},
+	Peso.PESADO: {
+		"masa": 25.0,
+		"muelle": 0.0,
+		"gravedad_sostenido": 1.0,
+		"arrastre": true,
+		"velocidad_arrastre": 3.4,
+		"aceleracion_arrastre": 10.0,
+		"ralentizacion": 0.5,
+		"lanzamiento": 0.3,
+		"tiron_max": 1.2,
+		"tropiezo": 1.0,
+		"fuerza_tropiezo": 0.7,
+	},
+}
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 const SPRING_STIFFNESS  : float = 150.0
 const SPRING_DAMPING    : float = 10.0
 const ANGULAR_STIFFNESS : float = 10.0
 const ANGULAR_DAMPING   : float = 2.0
+const ARRASTRE_GANANCIA : float = 4.0
+const ARRASTRE_GIRO     : float = 0.2
 const LIMBO_POSITION    : Vector3 = Vector3(0.0, -200.0, 0.0)
 const TUG_RESOLVE_DELAY : float  = 1.5
 const TUG_WIN_MARGIN    : float  = 5.0
+## Extra force when both hands of the same player drive the prop.
+const FUERZA_DOS_MANOS  : float  = 1.8
+## Minimum gap between two impact knocks from the same thrown object.
+const GOLPE_COOLDOWN_MS : int    = 600
 
 # ---------------------------------------------------------------------------
 # Exports
 # ---------------------------------------------------------------------------
 @export_group("Config")
+## Weight class. Overrides any mass set on the scene: mass is derived from it.
+@export var peso: Peso = Peso.LIGERO:
+	set(valor):
+		peso = valor
+		if is_node_ready():
+			_aplicar_config_peso()
 @export var es_ilegal: bool = false
 ## True when this illegal object has been repaired. GameManager reads this
 ## during the Boss inspection / end-of-day matrix to tell a broken object
@@ -58,6 +125,20 @@ const TUG_WIN_MARGIN    : float  = 5.0
 @export var en_bolsillo_de_id: int = 0
 
 # ---------------------------------------------------------------------------
+# Public weight values (read by Mano / Jugador; derived from CONFIG_PESO)
+# ---------------------------------------------------------------------------
+## Carry-speed multiplier (1.0 = no slowdown).
+var factor_ralentizacion: float = 1.0
+## Throw-speed multiplier.
+var factor_lanzamiento: float = 1.0
+## Max hand-to-object distance before the grip snaps (INF = never).
+var tiron_max: float = INF
+## Stumble time applied when the grip snaps or the object knocks a player over.
+var tiempo_tropiezo: float = 0.0
+## Minimum throw charge (0..1) that knocks a player over on impact.
+var fuerza_tropiezo: float = 1.0
+
+# ---------------------------------------------------------------------------
 # Signals
 # ---------------------------------------------------------------------------
 signal disputa_iniciada
@@ -80,22 +161,63 @@ var _posicion_pedestal: Vector3 = Vector3.ZERO
 var _pedestal_registrado: bool = false
 ## Cancellation token for tug-of-war coroutine
 var _tug_active: bool = false
+## Cached weight config (avoid dictionary lookups in the physics loop).
+var _escala_muelle: float = 1.0
+var _gravedad_sostenido: float = 0.0
+var _arrastre: bool = false
+var _velocidad_arrastre: float = 0.0
+var _aceleracion_arrastre: float = 0.0
+## Both hands of the same player hold this object (server-only): extra force.
+var agarre_doble: bool = false
+## True while this object is flying from a throw (armed for impact knocks).
+var _lanzado: bool = false
+## Charge (0..1) of the last throw; compared against fuerza_tropiezo.
+var _fuerza_lanzamiento: float = 0.0
+## Peer id that threw it, so the thrower cannot knock themselves out.
+var _ultimo_lanzador_id: int = 0
+var _ultimo_golpe_ms: int = 0
 
 # ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
 
 func _ready() -> void:
+	_aplicar_config_peso()
 	can_sleep = false
 	_original_collision_mask = collision_mask
 	_posicion_pedestal = global_position
 	_pedestal_registrado = true
+	# Needed to detect thrown-object impacts against players.
+	contact_monitor = true
+	max_contacts_reported = 4
+	body_entered.connect(_on_objeto_body_entered)
 	add_to_group("agarrables")
 	if es_ilegal:
 		add_to_group("ilegal")
 		if esta_reparado and multiplayer.is_server():
 			GameManager.notify_object_repaired()
 	_set_visual_state(es_ilegal and not esta_reparado)
+
+## Applies the weight-class table to the physical body and the cached values.
+func _aplicar_config_peso() -> void:
+	mass = _dato_peso("masa")
+	_escala_muelle = _dato_peso("muelle")
+	_gravedad_sostenido = _dato_peso("gravedad_sostenido")
+	_arrastre = bool(CONFIG_PESO[peso]["arrastre"])
+	_velocidad_arrastre = _dato_peso("velocidad_arrastre")
+	_aceleracion_arrastre = _dato_peso("aceleracion_arrastre")
+	factor_ralentizacion = _dato_peso("ralentizacion")
+	factor_lanzamiento = _dato_peso("lanzamiento")
+	tiron_max = _dato_peso("tiron_max")
+	tiempo_tropiezo = _dato_peso("tropiezo")
+	fuerza_tropiezo = _dato_peso("fuerza_tropiezo")
+
+func _dato_peso(clave: String) -> float:
+	return float(CONFIG_PESO[peso][clave])
+
+## Heavy props are too big to fit in the blind pocket.
+func se_puede_guardar() -> bool:
+	return peso != Peso.PESADO
 
 func _process(_delta: float) -> void:
 	# If nobody holds us and collision_layer was cleared, restore it.
@@ -129,10 +251,22 @@ func _apply_limbo(state: PhysicsDirectBodyState3D) -> void:
 	state.linear_velocity  = Vector3.ZERO
 	state.angular_velocity = Vector3.ZERO
 
+## A second hand of the same player on the prop multiplies the force.
+func _factor_dos_manos() -> float:
+	return FUERZA_DOS_MANOS if agarre_doble else 1.0
+
 func _apply_spring_forces(state: PhysicsDirectBodyState3D) -> void:
+	# Heavy props use a drag servo instead of the spring: see _apply_drag().
+	if _arrastre:
+		_apply_drag(state)
+		return
+
+	# The response is a property of the weight class, not of the raw mass, so
+	# designers tune "feel" in CONFIG_PESO instead of per-object kilograms.
+	var fuerza_manos := _factor_dos_manos()
 	var delta_pos := _target_position - state.transform.origin
-	var effective_stiffness := SPRING_STIFFNESS * _stiffness_multiplier
-	var force := (delta_pos * effective_stiffness) - (state.linear_velocity * SPRING_DAMPING)
+	var force := (delta_pos * SPRING_STIFFNESS * _escala_muelle * _stiffness_multiplier * fuerza_manos) \
+		- (state.linear_velocity * SPRING_DAMPING * _escala_muelle * fuerza_manos)
 	state.apply_central_force(force)
 
 	var clean_basis := state.transform.basis.orthonormalized()
@@ -142,8 +276,31 @@ func _apply_spring_forces(state: PhysicsDirectBodyState3D) -> void:
 	var angle       := rot_delta.get_angle()
 	if angle > PI:
 		angle -= TAU
-	var torque_local  := axis * angle * ANGULAR_STIFFNESS
-	var torque_global := clean_basis * torque_local - state.angular_velocity * ANGULAR_DAMPING
+	var torque_local  := axis * angle * ANGULAR_STIFFNESS * _escala_muelle * fuerza_manos
+	var torque_global := clean_basis * torque_local - state.angular_velocity * ANGULAR_DAMPING * _escala_muelle * fuerza_manos
+	state.apply_torque(torque_global)
+	_pending_order = false
+
+## Heavy props stay on the floor (gravity stays on) and are dragged with a
+## capped horizontal speed, so the hand can move them but never lift them.
+func _apply_drag(state: PhysicsDirectBodyState3D) -> void:
+	var fuerza_manos := _factor_dos_manos()
+	var delta := _target_position - state.transform.origin
+	var destino := Vector2(delta.x, delta.z) * ARRASTRE_GANANCIA
+	destino = destino.limit_length(_velocidad_arrastre * fuerza_manos)
+	var vel := state.linear_velocity
+	var vel_h := Vector2(vel.x, vel.z).move_toward(destino, _aceleracion_arrastre * fuerza_manos * state.step)
+	state.linear_velocity = Vector3(vel_h.x, vel.y, vel_h.y)
+
+	var clean_basis := state.transform.basis.orthonormalized()
+	var current_rot := Quaternion(clean_basis)
+	var rot_delta   := current_rot.inverse() * _target_rotation
+	var axis        := rot_delta.get_axis()
+	var angle       := rot_delta.get_angle()
+	if angle > PI:
+		angle -= TAU
+	var torque_local  := axis * angle * ANGULAR_STIFFNESS * ARRASTRE_GIRO
+	var torque_global := clean_basis * torque_local - state.angular_velocity * ANGULAR_DAMPING * ARRASTRE_GIRO
 	state.apply_torque(torque_global)
 	_pending_order = false
 
@@ -165,6 +322,9 @@ func intentar_coger(solicitante_id: int) -> void:
 
 	if id_sostenedor_1 == 0:
 		_assign_holder(solicitante_id)
+	elif id_sostenedor_1 == solicitante_id:
+		# Second hand of the same player: double grip, more force.
+		agarre_doble = true
 	elif id_sostenedor_1 != solicitante_id and id_sostenedor_2 == 0:
 		if agarre_fuerte:
 			_start_tug_of_war(solicitante_id)
@@ -172,10 +332,13 @@ func intentar_coger(solicitante_id: int) -> void:
 			_assign_holder(solicitante_id)
 
 @rpc("any_peer", "call_local", "reliable")
-func intentar_soltar(solicitante_id: int, impulso: Vector3) -> void:
+func intentar_soltar(solicitante_id: int, impulso: Vector3, carga: float = 0.0) -> void:
 	if not multiplayer.is_server():
 		return
-	if impulso != Vector3.ZERO:
+	_lanzado = impulso != Vector3.ZERO
+	if _lanzado:
+		_fuerza_lanzamiento = carga
+		_ultimo_lanzador_id = solicitante_id
 		apply_central_impulse(impulso)
 	_remove_collision_exception(solicitante_id)
 	if id_sostenedor_1 == solicitante_id:
@@ -183,6 +346,7 @@ func intentar_soltar(solicitante_id: int, impulso: Vector3) -> void:
 	elif id_sostenedor_2 == solicitante_id:
 		id_sostenedor_2 = 0
 	if id_sostenedor_1 == 0 and id_sostenedor_2 == 0:
+		agarre_doble = false
 		_configure_physics_free()
 		en_disputa = false
 	_broadcast_state.rpc(id_sostenedor_1, id_sostenedor_2, en_disputa)
@@ -221,6 +385,8 @@ func entrar_en_bolsillo(id_dueno: int) -> void:
 	id_sostenedor_1   = 0
 	id_sostenedor_2   = 0
 	en_disputa        = false
+	agarre_doble      = false
+	_lanzado          = false
 	_configure_physics_pocket()
 
 @rpc("any_peer", "call_local", "reliable")
@@ -348,7 +514,7 @@ func _configure_physics_free() -> void:
 func _configure_physics_held() -> void:
 	set_deferred("collision_layer", _original_collision_mask)
 	set_deferred("collision_mask",  _original_collision_mask)
-	gravity_scale = 0.0
+	gravity_scale = _gravedad_sostenido
 	visible = true
 	set_deferred("freeze", false)
 	set_deferred("sleeping", false)
@@ -389,6 +555,8 @@ func _assign_holder(new_id: int) -> void:
 	id_sostenedor_2   = 0
 	en_disputa        = false
 	agarre_fuerte     = false
+	agarre_doble      = false
+	_lanzado          = false
 	en_bolsillo_de_id = 0
 	_tug_active       = false
 	_configure_physics_held()
@@ -434,6 +602,27 @@ func _find_player(id: int) -> Node:
 			return p
 	return null
 
+## A thrown prop that hits a player hard enough knocks them over. Only the
+## server resolves the hit; the victim's own client plays the fall.
+func _on_objeto_body_entered(cuerpo: Node3D) -> void:
+	if not multiplayer.is_server() or not _lanzado:
+		return
+	if cuerpo == null or not cuerpo.is_in_group("jugadores"):
+		return
+	if cuerpo.name.to_int() == _ultimo_lanzador_id:
+		return
+	if _fuerza_lanzamiento < fuerza_tropiezo:
+		return
+	var ahora := Time.get_ticks_msec()
+	if ahora - _ultimo_golpe_ms < GOLPE_COOLDOWN_MS:
+		return
+	_ultimo_golpe_ms = ahora
+	var dir := cuerpo.global_position - global_position
+	dir.y = 0.0
+	if dir.is_zero_approx():
+		dir = -global_transform.basis.z
+	cuerpo.rpc("_rpc_tropiezo", dir.normalized(), tiempo_tropiezo)
+
 # ---------------------------------------------------------------------------
 # State broadcast
 # ---------------------------------------------------------------------------
@@ -443,6 +632,12 @@ func _broadcast_state(id1: int, id2: int, disputando: bool) -> void:
 	id_sostenedor_1 = id1
 	id_sostenedor_2 = id2
 	en_disputa      = disputando
+	# Keep the weight physics in sync on every peer: held heavy props keep
+	# gravity and are dragged, held light/medium ones float in the hand.
+	if id1 != 0 or id2 != 0:
+		_configure_physics_held()
+	else:
+		_configure_physics_free()
 	if disputando:
 		disputa_iniciada.emit()
 	else:

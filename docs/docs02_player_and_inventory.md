@@ -25,8 +25,40 @@ El Inventario del jugador no usa ninguna UI bidimensional. Consta de 1 único sl
 
 1.3. Colocación en el suelo (Modo fantasma, tecla E)
 
-    Mano._execute_placement() emite salir_de_bolsillo(pos_fantasma) para teletransportar y liberar físicas, y después intentar_soltar(id_local, Vector3.ZERO).
+    Mano._execute_placement() emite salir_de_bolsillo(pos_fantasma) para teletransportar y liberar físicas, y después intentar_soltar(id_local, Vector3.ZERO, 0.0).
     Este segundo RPC es necesario para que el servidor ponga id_sostenedor_1 a 0, elimine la excepción de colisión y difunda el estado. Sin él, el objeto quedaba en el suelo pero seguía marcado como agarrado por el jugador.
+    Ojo con las referencias durante el sellado: _broadcast_state() es call_local y, al soltar, emite disputa_finalizada de forma sincrónica en el host; la mano conectada a esa señal hace limpiar_estado_local(), que pone objeto_agarrado = null. Por eso _execute_placement() guarda primero var obj := objeto_agarrado y opera siempre sobre obj (antes daba el error "Invalid assignment of property 'global_rotation' ... on a base object of type 'Nil'").
+
+1.4. Clases de peso (objeto_agarrable.gd, CONFIG_PESO)
+
+    No se asignan kilogramos por escena. ObjetoAgarrable expone @export var peso: Peso { LIGERO, MEDIO, PESADO } y CONFIG_PESO es la única fuente de verdad: masa física, respuesta del muelle, gravedad mientras se sostiene, ralentización del jugador, multiplicador de lanzamiento, distancia máxima de tirón, duración del tropiezo y fuerza mínima de impacto para tumbar (fuerza_tropiezo).
+    Para añadir una clase: añade el valor al enum Peso y su entrada en CONFIG_PESO. Los valores se cachean en _aplicar_config_peso() (llamado en _ready y en el setter de peso).
+
+    LIGERO (Documento, Sello, CajaRota): masa 0.8, muelle 1.0, sin ralentización, lanzamiento x1.3, tiron_max = INF, tropiezo 0.7 s, tumba a partir del 90% de carga (fuerza_tropiezo = 0.9).
+    MEDIO (CajaPrueba): masa 5.0, muelle 0.6, ralentización 0.85, lanzamiento x0.6, tiron_max = INF, tropiezo 0.85 s, tumba a partir del 50% de carga (fuerza_tropiezo = 0.5).
+    PESADO (Mesa2): masa 25.0, ralentización 0.5, gravedad_sostenido = 1.0, arrastre = true, lanzamiento x0.3, tiron_max = 1.2 m, tropiezo 1.0 s; tumba a partir del 70% de carga (fuerza_tropiezo = 0.7).
+
+    Arrastre pesado: _apply_spring_forces() deriva a _apply_drag(). En vez de muelle, aplica un servo de velocidad horizontal (máx. 3.4 m/s, aceleración 10 m/s²) y deja actuar la gravedad, de modo que el objeto se arrastra por el suelo pero no se puede levantar. El giro usa un par débil (ARRASTRE_GIRO = 0.2) para que la mesa pueda girar despacio sin comportarse como una peonza.
+
+    Tirón roto: Mano._comprobar_tiron() se ejecuta solo en el peer del portador tras 0.8 s de gracia. Mide la distancia 3D entre el punto de agarre del objeto y pos_accion; si supera tiron_max durante 0.3 s seguidos (para no romper en un giro rápido), hace intentar_soltar(id_local, ZERO, 0.0), llama a Jugador.tropezar() y limpia la mano. Con las dos manos sobre el mismo objeto, el margen se multiplica por BONUS_TIRON_DOS_MANOS (1.5).
+
+    Tropiezo (volcar y levantarse): Jugador.tropezar(direccion, duracion) añade 3.5 m/s de lurch, bloquea el input y reduce el frenado al 15% mientras dure el tropiezo. Además lanza un Tween que vuelca el modelo (angulo_volcado, por defecto 80º) y acompaña la cámara (angulo_volcado_camara / roll_volcado), con una fracción de caída (fraccion_caida) y el resto para levantarse; al terminar, el modelo y la cámara vuelven a 0 y se reanuda el control. El tween es local (solo lo ve el jugador que cae). Al caer, _soltar_manos() suelta cualquier objeto que cualquiera de las dos manos esté sujetando. El tropiezo se dispara por el tirón roto y por impactos de objetos lanzados.
+
+    Indicador de agarre: mientras se sostiene un objeto con tiron_max finito (los pesados), Mano._comprobar_tiron() publica tension_agarre = distancia / distancia_max (0..1). Jugador muestra una barra en la parte inferior central (ProgressBar creada en _crear_barra_tension) que se llena y pasa de verde a rojo al acercarse al límite de rotura, de modo que el jugador ve cuánto le falta para tropezar. Se oculta al soltar o para objetos que nunca se rompen.
+
+    Impactos que tumban: con contact_monitor activo, ObjetoAgarrable._on_objeto_body_entered() detecta el choque de un objeto lanzado contra un jugador. Solo el servidor resuelve el golpe y compara la carga del lanzamiento (0..1) con fuerza_tropiezo de su clase (ligero 0.9, medio 0.5, pesado 0.7); si la alcanza, envía _rpc_tropiezo al cliente de la víctima (validando que el emisor sea el peer 1). El lanzador no puede tumbarse a sí mismo y hay un cooldown de 600 ms entre golpes del mismo objeto.
+
+    Golpes: solo el portador tiene excepción de colisión con el objeto. El resto de jugadores recibe el impulso físico real (masa del jugador = 70 kg), por lo que el peso de la clase escala el golpe de forma natural: ligero apenas empuja, medio es moderado y pesado empuja fuerte.
+
+    Lanzamiento: Mano.soltar() interpreta velocidad_lanzamiento / velocidad_lanzamiento_maxima (4..12 m/s) como velocidad objetivo, la multiplica por factor_lanzamiento y la convierte en impulso (velocidad * mass). Así el objeto ligero vuela rápido y lejos, y el pesado apenas sale de la mano.
+
+    Bolsillo y Cambiazo: se_puede_guardar() devuelve false para PESADO. Jugador bloquea guardarlo en el bolsillo (aviso "Demasiado pesado...") y _server_process_steal() aborta el Cambiazo si el objeto del ladrón es pesado.
+
+1.5. Agarre a dos manos (mismo jugador)
+
+    Las dos manos pueden sujetar el mismo objeto. En el servidor, un segundo intentar_coger() del mismo solicitante pone ObjetoAgarrable.agarre_doble = true; no inicia forcejeo ni reasigna el objeto. Mientras dura, _apply_spring_forces() y _apply_drag() multiplican la fuerza por FUERZA_DOS_MANOS (1.8), de modo que una mesa pesada se arrastra más rápido y responde mejor; en Jugador._factor_carga() la ralentización se multiplica por BONUS_DOS_MANOS (1.4), con tope en 1.0.
+
+    Para que las dos manos no peleen por el mismo objeto, Mano.mano_companera apunta a la otra mano (se enlaza en Jugador._setup_local_player). Con las dos manos sobre el mismo objeto solo la mano derecha envía actualizar_objetivo_agarre(); la izquierda actúa como secundaria y no manda objetivos. Al soltar (cualquier mano, lanzar o colocar), el objeto se libera por completo y agarre_doble vuelve a false.
 
 2. Mecánicas Sociales de Espalda (Steal / Inspect)
 Ambas mecánicas utilizan el mismo sistema subyacente: un RayCast o hitbox que detecta si estás detrás de otro jugador (dot > 0.0) manteniéndote a rango de colisión durante tiempo_para_cambiazo (1.5 segundos) mientras se rellena una barra circular (con RadialFill.gdshader).

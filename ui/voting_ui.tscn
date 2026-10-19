@@ -38,3 +38,27 @@ text = "🔴 TELÉFONO ROJO
 ¿Quién es el Torpe?"
 horizontal_alignment = 1
 autowrap_mode = 2
+
+[node name="Contador" type="Label" parent="."]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -200.0
+offset_top = 16.0
+offset_right = 200.0
+offset_bottom = 176.0
+grow_horizontal = 2
+horizontal_alignment = 1
+vertical_alignment = 1
+text = "45"
+
+[node name="Resultado" type="Label" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 64
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 2

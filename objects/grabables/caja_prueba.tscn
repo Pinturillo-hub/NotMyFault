@@ -3,3 +3,4 @@
 [ext_resource type="PackedScene" uid="uid://vxmgcjayd4hj" path="res://objects/grabables/objeto_agarrable.tscn" id="1_r64qd"]
 
 [node name="CajaPrueba" instance=ExtResource("1_r64qd")]
+peso = 1

@@ -28,6 +28,7 @@ properties/3/spawn = true
 properties/3/replication_mode = 1
 
 [node name="Jugador" type="RigidBody3D" groups=["jugadores"]]
+mass = 70.0
 collision_layer = 2
 axis_lock_angular_x = true
 axis_lock_angular_z = true

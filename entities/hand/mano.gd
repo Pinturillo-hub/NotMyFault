@@ -9,8 +9,9 @@ class_name Mano
 # Exports
 # ---------------------------------------------------------------------------
 @export var es_mano_izquierda: bool = false
-@export var fuerza_lanzamiento: float = 6.0
-@export var fuerza_lanzamiento_maxima: float = 20.0
+## Target throw speeds (m/s). Each weight class multiplies these.
+@export var velocidad_lanzamiento: float = 4.0
+@export var velocidad_lanzamiento_maxima: float = 12.0
 @export var offset_reposo_cuerpo: Vector3 = Vector3(0.4, 1.0, -0.6)
 
 @export_group("Timings")
@@ -20,6 +21,9 @@ class_name Mano
 
 # Set by Jugador after instantiation
 var barra_carga_ui: ProgressBar = null
+## The other hand of this same player. When both hold the same prop, only one
+## hand sends physics targets (otherwise the two targets fight each other).
+var mano_companera: Mano = null
 
 # ---------------------------------------------------------------------------
 # Node references
@@ -32,6 +36,8 @@ var barra_carga_ui: ProgressBar = null
 # Public state (read by Jugador for steal logic)
 # ---------------------------------------------------------------------------
 var objeto_agarrado: ObjetoAgarrable = null
+## 0..1 grip tension for the on-screen warning (1 = about to snap).
+var tension_agarre: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Private state
@@ -43,6 +49,7 @@ var _modo_manosear:         bool  = false
 var _punto_agarre_local:    Vector3 = Vector3.ZERO
 var _en_disputa_activa:     bool  = false
 var _tiempo_desde_agarre:   float = 0.0
+var _tiempo_tenso:          float = 0.0
 var _z_original_accion:     float = 0.0
 var _tween_activo:          Tween = null
 
@@ -56,6 +63,10 @@ var _pos_fantasma_final:    Vector3 = Vector3.ZERO
 var _rot_fantasma_final:    Vector3 = Vector3.ZERO
 
 const MAX_SLOPE_DEG: float = 45.0
+## How long the hand may stay overextended before the grip snaps.
+const TIEMPO_TIRON_ROTO: float = 0.3
+## Two-handed grip holds further before snapping.
+const BONUS_TIRON_DOS_MANOS: float = 1.5
 
 # ---------------------------------------------------------------------------
 # Lifecycle
@@ -101,7 +112,11 @@ func _update_held_object() -> void:
 			limpiar_estado_local()
 			return
 	if is_instance_valid(objeto_agarrado):
-		_send_physics_data()
+		_comprobar_tiron()
+		# The grip may have snapped inside _comprobar_tiron(): it clears
+		# objeto_agarrado, so re-check before sending physics data.
+		if objeto_agarrado != null:
+			_send_physics_data()
 
 # ---------------------------------------------------------------------------
 # Main input entry — called by Jugador
@@ -209,12 +224,17 @@ func forzar_agarre_inmediato(cuerpo: ObjetoAgarrable, posicion_mundo: Vector3) -
 # Release / Throw
 # ---------------------------------------------------------------------------
 
-func soltar(lanzar: bool, fuerza_custom: float = -1.0) -> void:
+func soltar(lanzar: bool, velocidad_custom: float = -1.0, carga: float = 0.0) -> void:
 	if objeto_agarrado == null:
 		return
-	var fuerza  := fuerza_custom if fuerza_custom >= 0.0 else fuerza_lanzamiento
-	var impulso := -pos_accion.global_transform.basis.z * fuerza if lanzar else Vector3.ZERO
-	objeto_agarrado.rpc("intentar_soltar", multiplayer.get_unique_id(), impulso)
+	var velocidad := velocidad_custom if velocidad_custom >= 0.0 else velocidad_lanzamiento
+	var impulso := Vector3.ZERO
+	if lanzar:
+		# The value is a target speed: convert it to an impulse using the class
+		# mass so light objects fly faster and heavy ones barely leave the hand.
+		velocidad *= objeto_agarrado.factor_lanzamiento
+		impulso = -pos_accion.global_transform.basis.z * velocidad * objeto_agarrado.mass
+	objeto_agarrado.rpc("intentar_soltar", multiplayer.get_unique_id(), impulso, carga)
 	limpiar_estado_local()
 
 func limpiar_estado_local() -> void:
@@ -225,6 +245,8 @@ func limpiar_estado_local() -> void:
 	objeto_agarrado     = null
 	_en_disputa_activa  = false
 	_punto_agarre_local = Vector3.ZERO
+	_tiempo_tenso       = 0.0
+	tension_agarre      = 0.0
 	_set_charge_bar_visible(false)
 
 func _decide_final_action() -> void:
@@ -240,8 +262,42 @@ func _decide_final_action() -> void:
 	else:
 		var rango: float  = tiempo_carga_maxima - tiempo_para_lanzar
 		var carga: float  = clamp((_tiempo_pulsado - tiempo_para_lanzar) / rango, 0.0, 1.0)
-		var fuerza: float = lerp(fuerza_lanzamiento, fuerza_lanzamiento_maxima, carga)
-		soltar(true, fuerza)
+		var velocidad: float = lerp(velocidad_lanzamiento, velocidad_lanzamiento_maxima, carga)
+		soltar(true, velocidad, carga)
+
+## Heavy props pull on a short leash: if the hand gets too far from the object
+## the grip snaps and the player stumbles.
+func _comprobar_tiron() -> void:
+	tension_agarre = 0.0
+	if _jugador == null or _tiempo_desde_agarre < 0.8:
+		return
+	var distancia_max := objeto_agarrado.tiron_max
+	if is_inf(distancia_max):
+		return
+	if _agarre_compartido():
+		distancia_max *= BONUS_TIRON_DOS_MANOS
+	var punto := objeto_agarrado.to_global(_punto_agarre_local)
+	var distancia := punto.distance_to(pos_accion.global_position)
+	tension_agarre = clampf(distancia / distancia_max, 0.0, 1.0)
+	if distancia <= distancia_max:
+		_tiempo_tenso = 0.0
+		return
+	# A quick turn can overextend the grip for a frame or two; only a sustained
+	# pull snaps it (blocked object, walking away, trying to lift it).
+	_tiempo_tenso += get_physics_process_delta_time()
+	if _tiempo_tenso < TIEMPO_TIRON_ROTO:
+		return
+	_tiempo_tenso = 0.0
+
+	# The player lurches away from the object when the tension releases.
+	var direccion := _jugador.global_position - punto
+	direccion.y = 0.0
+	direccion = direccion.normalized()
+
+	var obj := objeto_agarrado
+	obj.rpc("intentar_soltar", multiplayer.get_unique_id(), Vector3.ZERO, 0.0)
+	_jugador.tropezar(direccion, obj.tiempo_tropiezo)
+	limpiar_estado_local()
 
 # ---------------------------------------------------------------------------
 # Placement mode
@@ -290,13 +346,16 @@ func _update_ghost(info: Dictionary) -> void:
 func _execute_placement() -> void:
 	if objeto_agarrado == null:
 		return
-	objeto_agarrado.rpc("salir_de_bolsillo", _pos_fantasma_final)
+	# Keep a local handle: releasing triggers _broadcast_state synchronously on
+	# the host, which clears objeto_agarrado through disputa_finalizada.
+	var obj := objeto_agarrado
+	obj.rpc("salir_de_bolsillo", _pos_fantasma_final)
 	# Release on the server as well; otherwise the object stays marked as held
 	# (stale id_sostenedor_1 / collision exception) after being placed.
-	objeto_agarrado.rpc("intentar_soltar", multiplayer.get_unique_id(), Vector3.ZERO)
-	objeto_agarrado.global_rotation = _rot_fantasma_final
-	objeto_agarrado.linear_velocity  = Vector3.ZERO
-	objeto_agarrado.angular_velocity = Vector3.ZERO
+	obj.rpc("intentar_soltar", multiplayer.get_unique_id(), Vector3.ZERO, 0.0)
+	obj.global_rotation  = _rot_fantasma_final
+	obj.linear_velocity  = Vector3.ZERO
+	obj.angular_velocity = Vector3.ZERO
 	limpiar_estado_local()
 
 func _clear_ghost() -> void:
@@ -328,10 +387,22 @@ func _align_y_to_normal(node: Node3D, new_y: Vector3) -> void:
 # ---------------------------------------------------------------------------
 
 func _send_physics_data() -> void:
+	# With both hands on the same prop only one hand drives the physics,
+	# otherwise the two hand targets fight each other.
+	if es_mano_izquierda and _agarre_compartido():
+		return
 	var offset_rotado  := objeto_agarrado.global_transform.basis * _punto_agarre_local
 	var pos_destino    := pos_accion.global_position - offset_rotado
 	var rot_destino    := Quaternion(pos_accion.global_transform.basis.orthonormalized())
 	objeto_agarrado.rpc("actualizar_objetivo_agarre", pos_destino, rot_destino, multiplayer.get_unique_id())
+
+## True when this hand and its companion hand hold the same object.
+func _agarre_compartido() -> bool:
+	return (
+		mano_companera != null
+		and objeto_agarrado != null
+		and mano_companera.objeto_agarrado == objeto_agarrado
+	)
 
 # ---------------------------------------------------------------------------
 # Visuals

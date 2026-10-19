@@ -24,7 +24,7 @@ size = Vector3(0.873, 0.092, 1.727)
 albedo_color = Color(0.7017098, 0.49346644, 0.22251272, 1)
 
 [node name="Mesa" instance=ExtResource("1_3ewnu")]
-mass = 30.0
+peso = 2
 
 [node name="CollisionShape3D" parent="." index="0"]
 transform = Transform3D(1.438, 0, 0, 0, 1.438, 0, 0, 0, 1.438, 0, 0.8716245, 0)

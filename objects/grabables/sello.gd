@@ -39,8 +39,8 @@ func intentar_coger(solicitante_id: int) -> void:
 		_detector.set_deferred("monitoring", false)
 
 @rpc("any_peer", "call_local", "reliable")
-func intentar_soltar(solicitante_id: int, impulso: Vector3) -> void:
-	super.intentar_soltar(solicitante_id, impulso)
+func intentar_soltar(solicitante_id: int, impulso: Vector3, carga: float = 0.0) -> void:
+	super.intentar_soltar(solicitante_id, impulso, carga)
 	if is_instance_valid(_detector):
 		_detector.set_deferred("monitoring", true)
 
