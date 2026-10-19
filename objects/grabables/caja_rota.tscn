@@ -7,6 +7,7 @@ albedo_color = Color(1, 0, 0.2833333, 1)
 
 [node name="CajaRota" instance=ExtResource("1_imxvu")]
 es_ilegal = true
+pista_inspeccion = "Sientes cerámica rota y cables sueltos. Definitivamente es el objeto del jefe."
 
 [node name="MeshInstance3D" parent="." index="1"]
 surface_material_override/0 = SubResource("StandardMaterial3D_imxvu")

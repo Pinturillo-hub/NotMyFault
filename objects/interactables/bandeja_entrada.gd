@@ -34,19 +34,43 @@ var _documentos_activos: Array[ObjetoAgarrable] = []
 
 func _ready() -> void:
 	_apply_color()
-	if not multiplayer.is_server():
-		return
 	if documento_escena == null:
 		return
+
 	_timer.wait_time = tiempo_entre_spawns
-	_timer.timeout.connect(_on_timer_spawn)
-	_timer.start()
+	if not _timer.timeout.is_connected(_on_timer_spawn):
+		_timer.timeout.connect(_on_timer_spawn)
+	if not GameManager.game_phase_changed.is_connected(_on_phase_changed):
+		GameManager.game_phase_changed.connect(_on_phase_changed)
+
+	# The scene is loaded before the host/join choice, so we cannot decide here
+	# whether this peer will be the server. Start spawning only when the
+	# authoritative client enters the working phase.
+	_actualizar_spawn(GameManager.current_phase)
+
+func _on_phase_changed(new_phase: int) -> void:
+	_actualizar_spawn(new_phase)
+
+func _actualizar_spawn(phase: int) -> void:
+	var debe_spawnear := phase == GameManager.Phase.WORKING and GameManager.es_servidor_activo()
+	if debe_spawnear:
+		if _timer.is_stopped():
+			_timer.start()
+	else:
+		_timer.stop()
 
 # ---------------------------------------------------------------------------
 # Spawn
 # ---------------------------------------------------------------------------
 
 func _on_timer_spawn() -> void:
+	if not GameManager.es_servidor_activo():
+		_timer.stop()
+		return
+	if GameManager.current_phase != GameManager.Phase.WORKING:
+		_timer.stop()
+		return
+
 	# Prune freed nodes
 	_documentos_activos = _documentos_activos.filter(func(n): return is_instance_valid(n))
 

@@ -13,8 +13,11 @@ signal game_ended(result: GameResult)
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
-enum Phase { LOBBY, WORKING, BOSS_INSPECTION, ENDED }
+enum Phase { LOBBY, WORKING, BOSS_INSPECTION, BOARDROOM_VOTING, ENDED }
 enum Role  { UNASSIGNED, INNOCENT, LIABILITY }
+
+const VOTING_DURATION: float = 45.0
+const VOTING_INCONCLUSIVE_CHAOS: float = 25.0
 
 enum GameResult {
 	LIABILITY_REPAIRED,          # Liability fixed object, 18:00 reached → Liability wins
@@ -39,11 +42,47 @@ enum GameResult {
 
 @export var roles: Dictionary = {}          # player_id (int) → Role
 @export var broken_object_repaired: bool = false
+@export var voting_active: bool = false
+@export var voting_time_left: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Private
 # ---------------------------------------------------------------------------
+var _votes: Dictionary = {}                 # voter_id (int) → target_id (int)
+var _voting_resolved: bool = false
 var _vote_target_id: int = -1
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
+func _ready() -> void:
+	# Keep processing enabled on every peer; _process checks authoritative
+	# status itself. Doing it here would be unreliable because the scene loads
+	# before the host/join choice assigns the MultiplayerPeer.
+	set_process(true)
+
+func _process(delta: float) -> void:
+	if not es_servidor_activo():
+		return
+	if current_phase != Phase.BOARDROOM_VOTING:
+		return
+	if _voting_resolved:
+		return
+
+	voting_time_left = maxf(voting_time_left - delta, 0.0)
+	if voting_time_left <= 0.0:
+		_resolve_vote()
+
+## True only when a MultiplayerPeer is active and we are the server.
+## Safe to call every frame, unlike multiplayer.is_server() after a disconnect.
+func es_servidor_activo() -> bool:
+	var peer := multiplayer.multiplayer_peer
+	if peer == null:
+		return false
+	if peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		return false
+	return multiplayer.is_server()
 
 # ---------------------------------------------------------------------------
 # Public API (server-only mutation)
@@ -78,17 +117,37 @@ func trigger_end_of_day() -> void:
 		return
 	_evaluate_end_of_day()
 
-func submit_vote(_voter_id: int, target_id: int) -> void:
+## Starts the 45-second Boardroom vote. Called by the red phone.
+func start_voting() -> void:
 	if not multiplayer.is_server():
 		return
 	if current_phase != Phase.WORKING:
 		return
+
+	_votes.clear()
+	_voting_resolved = false
+	voting_active = true
+	voting_time_left = VOTING_DURATION
+	current_phase = Phase.BOARDROOM_VOTING
+	_broadcast_voting_started.rpc(VOTING_DURATION)
+
+## Stores one vote. The result is only resolved when the timer ends (or when
+## every eligible player has voted).
+func submit_vote(voter_id: int, target_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	if current_phase != Phase.BOARDROOM_VOTING:
+		return
+	if not roles.has(voter_id):
+		return
+	if voter_id == target_id:
+		return
+
+	_votes[voter_id] = target_id
 	_vote_target_id = target_id
-	var liability_id := _get_liability_id()
-	if target_id == liability_id:
-		_end_game(GameResult.VOTE_CORRECT)
-	else:
-		_end_game(GameResult.VOTE_WRONG)
+
+	if _votes.size() >= roles.size():
+		_resolve_vote()
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -108,8 +167,91 @@ func _get_liability_id() -> int:
 			return id
 	return -1
 
+# ---------------------------------------------------------------------------
+# Voting resolution (Qualified Majority)
+# ---------------------------------------------------------------------------
+
+func _resolve_vote() -> void:
+	if not multiplayer.is_server():
+		return
+	if current_phase != Phase.BOARDROOM_VOTING or _voting_resolved:
+		return
+
+	_voting_resolved = true
+	voting_active = false
+	voting_time_left = 0.0
+
+	var total_voters := roles.size()
+	var required := int(ceil(float(total_voters) * 0.5))
+
+	var counts: Dictionary = {}
+	for voter_id in _votes:
+		var target_id: int = int(_votes[voter_id])
+		counts[target_id] = int(counts.get(target_id, 0)) + 1
+
+	var top_target := -1
+	var top_votes := 0
+	var tied := false
+	for target_id in counts:
+		var votes: int = int(counts[target_id])
+		if votes > top_votes:
+			top_target = target_id
+			top_votes = votes
+			tied = false
+		elif votes == top_votes:
+			tied = true
+
+	# No qualified majority (empty, tied or dispersed votes): the meeting fails.
+	if top_target == -1 or tied or top_votes < required:
+		_resolve_inconclusive_vote()
+		return
+
+	if top_target == _get_liability_id():
+		_end_game(GameResult.VOTE_CORRECT)
+	else:
+		_end_game(GameResult.VOTE_WRONG)
+
+func _resolve_inconclusive_vote() -> void:
+	_votes.clear()
+	_vote_target_id = -1
+	voting_active = false
+	voting_time_left = 0.0
+	_voting_resolved = false
+
+	# Everyone returns to work, the Boss is angered and the phone breaks.
+	_broadcast_vote_inconclusive.rpc()
+
+	var boss := get_tree().get_first_node_in_group("boss_manager")
+	if boss and boss.has_method("agregar_caos"):
+		boss.agregar_caos(VOTING_INCONCLUSIVE_CHAOS)
+
+	var telefono := get_tree().get_first_node_in_group("telefono_rojo")
+	if telefono and telefono.has_method("romper"):
+		telefono.romper()
+
 func _evaluate_end_of_day() -> void:
-	if broken_object_repaired:
+	var objetos := _get_illegal_objects()
+
+	# Fallback for scenes without a physical illegal object (legacy flag).
+	if objetos.is_empty():
+		if broken_object_repaired:
+			_end_game(GameResult.LIABILITY_REPAIRED)
+		else:
+			_end_game(GameResult.INNOCENTS_SURVIVED)
+		return
+
+	var todas_reparadas := true
+	var todas_en_pedestal := true
+
+	for obj in objetos:
+		if not _is_object_repaired(obj):
+			todas_reparadas = false
+			break
+		if not _is_object_on_pedestal(obj):
+			todas_en_pedestal = false
+
+	# GDD: repaired AND back on its original pedestal = perfect crime (Torpe wins).
+	if todas_reparadas and todas_en_pedestal:
 		_end_game(GameResult.LIABILITY_REPAIRED)
 	else:
 		_end_game(GameResult.INNOCENTS_SURVIVED)
@@ -122,40 +264,78 @@ func _run_inspection_logic() -> void:
 		return  # State changed while waiting — abort.
 
 	var liability_id := _get_liability_id()
+	var objetos := _get_illegal_objects()
 
-	# --- Check 1: Broken object on the floor (nobody holding it) ---
-	for obj in get_tree().get_nodes_in_group("ilegal"):
-		# Access properties dynamically — avoids class reference issues in autoload
-		var sostenedor : int = obj.get("id_sostenedor_1") if obj.get("id_sostenedor_1") != null else 0
-		var en_bolsillo: int = obj.get("en_bolsillo_de_id") if obj.get("en_bolsillo_de_id") != null else 0
-		if sostenedor == 0 and en_bolsillo == 0:
-			_end_game(GameResult.BOSS_FOUND_OBJECT_FLOOR)
+	if objetos.is_empty():
+		_end_game_false_alarm.rpc()
+		return
+
+	# --- Pass 1: broken objects have priority, wherever they are ---
+	# GDD 3.2: broken on an Innocent -> Torpe wins; broken on the Torpe ->
+	# Innocents win; broken left on the floor -> everyone loses.
+	for obj in objetos:
+		if _is_object_repaired(obj):
+			continue
+
+		var portador := _get_object_holder_id(obj)
+		if portador != 0:
+			if portador == liability_id:
+				_end_game(GameResult.BOSS_CAUGHT_LIABILITY)
+			else:
+				_end_game(GameResult.BOSS_CAUGHT_INNOCENT)
 			return
 
-	# --- Check 2: Scan players ---
-	for player_node in get_tree().get_nodes_in_group("jugadores"):
-		if not player_node.has_method("tiene_objeto_ilegal"):
-			continue
-		var pid := player_node.name.to_int()
+		# Broken and nobody is carrying it: it is exposed on the floor.
+		_end_game(GameResult.BOSS_FOUND_OBJECT_FLOOR)
+		return
 
-		if not player_node.tiene_objeto_ilegal():
+	# --- Pass 2: repaired objects ---
+	# GDD 3.2: repaired but still in the Torpe's hands (not on its pedestal)
+	# while the Boss storms out because of chaos -> everyone loses.
+	for obj in objetos:
+		if not _is_object_repaired(obj):
 			continue
-
-		# GDD: "Sale el Jefe (Caos) + Reparado en mano de Torpe → TODOS PIERDEN"
-		if pid == liability_id and broken_object_repaired:
+		if _get_object_holder_id(obj) == liability_id and not _is_object_on_pedestal(obj):
 			_end_game(GameResult.BOSS_FOUND_REPAIRED_ON_LIABILITY)
 			return
 
-		if pid == liability_id:
-			_end_game(GameResult.BOSS_CAUGHT_LIABILITY)
-		else:
-			_end_game(GameResult.BOSS_CAUGHT_INNOCENT)
-		return
-
-	# --- Nobody caught — false alarm ---
+	# --- Nothing incriminating — false alarm ---
 	_end_game_false_alarm.rpc()
 
+# ---------------------------------------------------------------------------
+# Inspection helpers (dynamic access keeps the autoload decoupled)
+# ---------------------------------------------------------------------------
+
+func _get_illegal_objects() -> Array[Node]:
+	return get_tree().get_nodes_in_group("ilegal")
+
+func _is_object_repaired(obj: Node) -> bool:
+	return obj.get("esta_reparado") == true
+
+func _is_object_on_pedestal(obj: Node) -> bool:
+	if obj.has_method("esta_en_pedestal"):
+		return bool(obj.call("esta_en_pedestal"))
+	return false
+
+## Returns the peer id carrying the object (hand, tug-of-war or pocket), or 0.
+func _get_object_holder_id(obj: Node) -> int:
+	var en_bolsillo: Variant = obj.get("en_bolsillo_de_id")
+	if en_bolsillo != null and int(en_bolsillo) != 0:
+		return int(en_bolsillo)
+
+	var id1: Variant = obj.get("id_sostenedor_1")
+	if id1 != null and int(id1) != 0:
+		return int(id1)
+
+	var id2: Variant = obj.get("id_sostenedor_2")
+	if id2 != null and int(id2) != 0:
+		return int(id2)
+
+	return 0
+
 func _end_game(result: GameResult) -> void:
+	voting_active = false
+	voting_time_left = 0.0
 	current_phase = Phase.ENDED
 	_broadcast_end.rpc(result)
 
@@ -166,9 +346,35 @@ func _end_game(result: GameResult) -> void:
 @rpc("authority", "call_local", "reliable")
 func _sync_roles(role_dict: Dictionary) -> void:
 	roles = role_dict
+	# Clients must also enter the working phase; otherwise their local
+	# GameManager stays in LOBBY and interactions are rejected.
+	current_phase = Phase.WORKING
 	var my_id := multiplayer.get_unique_id()
 	if my_id in roles:
 		role_assigned.emit(my_id, roles[my_id])
+		var nombre_rol := "INOCENTE"
+		if roles[my_id] == Role.LIABILITY:
+			nombre_rol = "TORPE"
+		print("[ROL] peer ", my_id, " = ", nombre_rol)
+
+@rpc("authority", "call_local", "reliable")
+func _broadcast_voting_started(duration: float) -> void:
+	current_phase = Phase.BOARDROOM_VOTING
+	voting_active = true
+	voting_time_left = duration
+	# Each peer opens the ballot locally for its own player.
+	var telefono := get_tree().get_first_node_in_group("telefono_rojo")
+	if telefono and telefono.has_method("abrir_ui_local"):
+		telefono.abrir_ui_local(multiplayer.get_unique_id())
+
+@rpc("authority", "call_local", "reliable")
+func _broadcast_vote_inconclusive() -> void:
+	current_phase = Phase.WORKING
+	voting_active = false
+	voting_time_left = 0.0
+	var ui := get_tree().get_first_node_in_group("voting_ui")
+	if ui and ui.has_method("cerrar_ui"):
+		ui.cerrar_ui()
 
 @rpc("authority", "call_local", "reliable")
 func _run_inspection() -> void:
@@ -179,6 +385,11 @@ func _run_inspection() -> void:
 @rpc("authority", "call_local", "reliable")
 func _broadcast_end(result: GameResult) -> void:
 	current_phase = Phase.ENDED
+	voting_active = false
+	voting_time_left = 0.0
+	var ui := get_tree().get_first_node_in_group("voting_ui")
+	if ui and ui.has_method("cerrar_ui"):
+		ui.cerrar_ui()
 	game_ended.emit(result)
 
 @rpc("authority", "call_local", "reliable")

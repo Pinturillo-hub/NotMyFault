@@ -20,6 +20,7 @@ class_name BandejaSalida
 # Private
 # ---------------------------------------------------------------------------
 var _boss_manager: BossManager = null
+var _documentos_procesados: Dictionary = {}
 
 # ---------------------------------------------------------------------------
 # Lifecycle
@@ -50,12 +51,26 @@ func _on_object_received(cuerpo: Node3D) -> void:
 		_reject_document(doc)
 
 func _accept_document(doc: Documento) -> void:
-	if _boss_manager:
-		_boss_manager.rpc("agregar_caos", -reduccion_caos)
+	# An Area3D may emit body_entered more than once for the same body.
+	var doc_id := doc.get_instance_id()
+	if _documentos_procesados.has(doc_id):
+		return
+	_documentos_procesados[doc_id] = true
+
+	var boss := _get_boss_manager()
+	if boss != null:
+		# Server-side direct call: lowering anger rewards the sealed document.
+		boss.agregar_caos(-reduccion_caos)
 	doc.queue_free()
 
 func _reject_document(doc: Documento) -> void:
 	doc.apply_central_impulse(Vector3.UP * 3.0)
+
+func _get_boss_manager() -> BossManager:
+	if is_instance_valid(_boss_manager):
+		return _boss_manager
+	_boss_manager = get_tree().get_first_node_in_group("boss_manager") as BossManager
+	return _boss_manager
 
 # ---------------------------------------------------------------------------
 # Helpers

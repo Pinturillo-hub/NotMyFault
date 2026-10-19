@@ -14,12 +14,6 @@ signal voto_emitido(target_id: int)
 # ---------------------------------------------------------------------------
 @onready var _container: VBoxContainer = $Panel/VBoxContainer
 @onready var _titulo:    Label         = $Panel/VBoxContainer/Titulo
-@onready var _panel:     Panel         = $Panel
-
-# ---------------------------------------------------------------------------
-# Private
-# ---------------------------------------------------------------------------
-var _telefono: Node = null   # Reference back to TelefonoRojo to forward the vote
 
 # ---------------------------------------------------------------------------
 # Lifecycle
@@ -33,7 +27,7 @@ func _ready() -> void:
 # Public API
 # ---------------------------------------------------------------------------
 
-func open(player_ids: Array[int], voter_id: int) -> void:
+func open(player_ids: Array[int], _voter_id: int) -> void:
 	# Clear previous buttons
 	for child in _container.get_children():
 		if child is Button:
@@ -69,6 +63,10 @@ func _on_vote_pressed(target_id: int) -> void:
 		telefono._recibir_voto(target_id)
 
 func _on_cancel() -> void:
+	_close()
+
+## Public: called by GameManager when the meeting ends or is inconclusive.
+func cerrar_ui() -> void:
 	_close()
 
 func _close() -> void:

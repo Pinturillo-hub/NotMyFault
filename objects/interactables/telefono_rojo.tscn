@@ -1,0 +1,25 @@
+[gd_scene load_steps=4 format=3 uid="uid://s6f8lew21qk2"]
+
+[ext_resource type="Script" uid="uid://6124xdvjd2pp" path="res://objects/interactables/telefono_rojo.gd" id="1_ygrjc"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_601y4"]
+height = 0.6
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_phone"]
+albedo_color = Color(0.72, 0.04, 0.04, 1)
+metallic = 0.15
+roughness = 0.35
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_601y4"]
+height = 0.6
+
+[node name="TelefonoRojo" type="StaticBody3D"]
+collision_layer = 1
+script = ExtResource("1_ygrjc")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("CylinderMesh_601y4")
+surface_material_override/0 = SubResource("StandardMaterial3D_phone")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("CylinderShape3D_601y4")

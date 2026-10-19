@@ -26,6 +26,16 @@ const TUG_WIN_MARGIN    : float  = 5.0
 # ---------------------------------------------------------------------------
 @export_group("Config")
 @export var es_ilegal: bool = false
+## True when this illegal object has been repaired. GameManager reads this
+## during the Boss inspection / end-of-day matrix to tell a broken object
+## from a repaired one. Ignored for non-illegal objects.
+@export var esta_reparado: bool = false
+## Distance (metres) from its spawn point within which the object still
+## counts as being on its original pedestal.
+@export var radio_pedestal: float = 1.0
+## Clue shown to a player who successfully performs a risky inspection while
+## this object is hidden in another player's pocket.
+@export_multiline var pista_inspeccion: String = ""
 @export var usar_animacion_golpe: bool = true
 @export var distancia_golpe: float = 0.5
 
@@ -65,6 +75,9 @@ var _tug_force_holder_2: float = 0.0
 var _stiffness_multiplier: float = 1.0
 var _original_collision_mask: int = 0
 var _teleport_frames: int = 0
+## Position where the object spawned; used as its original pedestal.
+var _posicion_pedestal: Vector3 = Vector3.ZERO
+var _pedestal_registrado: bool = false
 ## Cancellation token for tug-of-war coroutine
 var _tug_active: bool = false
 
@@ -75,10 +88,14 @@ var _tug_active: bool = false
 func _ready() -> void:
 	can_sleep = false
 	_original_collision_mask = collision_mask
+	_posicion_pedestal = global_position
+	_pedestal_registrado = true
 	add_to_group("agarrables")
 	if es_ilegal:
 		add_to_group("ilegal")
-	_set_visual_state(false)
+		if esta_reparado and multiplayer.is_server():
+			GameManager.notify_object_repaired()
+	_set_visual_state(es_ilegal and not esta_reparado)
 
 func _process(_delta: float) -> void:
 	# If nobody holds us and collision_layer was cleared, restore it.
@@ -98,7 +115,7 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		_teleport_frames -= 1
 		return
 
-	if not multiplayer.is_server():
+	if not GameManager.es_servidor_activo():
 		return
 
 	_time_since_last_order += state.step
@@ -196,6 +213,10 @@ func actualizar_objetivo_agarre(posicion: Vector3, rotacion: Quaternion, id_juga
 
 @rpc("any_peer", "call_local", "reliable")
 func entrar_en_bolsillo(id_dueno: int) -> void:
+	# Clear the previous holder's physics exception before zeroing the ids;
+	# otherwise a stale exception survives across pocket cycles.
+	_remove_collision_exception(id_sostenedor_1)
+	_remove_collision_exception(id_sostenedor_2)
 	en_bolsillo_de_id = id_dueno
 	id_sostenedor_1   = 0
 	id_sostenedor_2   = 0
@@ -214,7 +235,10 @@ func salir_de_bolsillo(posicion_salida: Vector3) -> void:
 
 @rpc("any_peer", "call_local")
 func usar_objeto() -> void:
-	if usar_animacion_golpe:
+	# Ghost mode is an authority-only RPC: only the server may trigger it.
+	# Clients run usar_objeto locally via call_local, but calling the RPC from
+	# a client is rejected ("RPC ... is not allowed ... Mode is authority").
+	if usar_animacion_golpe and multiplayer.is_server():
 		_activate_ghost_mode.rpc(0.4)
 
 @rpc("any_peer", "call_local", "reliable")
@@ -239,6 +263,41 @@ func _notify_pocket_exit_steal(posicion: Vector3) -> void:
 	visible = true
 	if has_method("reset_physics_interpolation"):
 		reset_physics_interpolation()
+
+# ---------------------------------------------------------------------------
+# Public API — Repair state (illegal object / Boss inspection)
+# ---------------------------------------------------------------------------
+
+## Marks the illegal object as repaired. Server-authoritative.
+func marcar_como_reparado() -> void:
+	if not multiplayer.is_server():
+		return
+	if esta_reparado:
+		return
+	_rpc_set_reparado.rpc(true)
+	if es_ilegal:
+		GameManager.notify_object_repaired()
+
+## Marks the illegal object as broken again. Server-authoritative.
+func marcar_como_roto() -> void:
+	if not multiplayer.is_server():
+		return
+	if not esta_reparado:
+		return
+	_rpc_set_reparado.rpc(false)
+
+## Repaired + physically back on the spot where it spawned.
+func esta_en_pedestal() -> bool:
+	if not _pedestal_registrado:
+		return false
+	if id_sostenedor_1 != 0 or id_sostenedor_2 != 0 or en_bolsillo_de_id != 0:
+		return false
+	return global_position.distance_to(_posicion_pedestal) <= radio_pedestal
+
+@rpc("authority", "call_local", "reliable")
+func _rpc_set_reparado(valor: bool) -> void:
+	esta_reparado = valor
+	_set_visual_state(es_ilegal and not esta_reparado)
 
 # ---------------------------------------------------------------------------
 # Tug-of-war

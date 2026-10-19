@@ -291,6 +291,9 @@ func _execute_placement() -> void:
 	if objeto_agarrado == null:
 		return
 	objeto_agarrado.rpc("salir_de_bolsillo", _pos_fantasma_final)
+	# Release on the server as well; otherwise the object stays marked as held
+	# (stale id_sostenedor_1 / collision exception) after being placed.
+	objeto_agarrado.rpc("intentar_soltar", multiplayer.get_unique_id(), Vector3.ZERO)
 	objeto_agarrado.global_rotation = _rot_fantasma_final
 	objeto_agarrado.linear_velocity  = Vector3.ZERO
 	objeto_agarrado.angular_velocity = Vector3.ZERO

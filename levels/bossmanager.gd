@@ -11,7 +11,7 @@ class_name BossManager
 # ---------------------------------------------------------------------------
 @export_group("Anger Settings")
 @export var ira_maxima:             float = 100.0
-@export var aumento_pasivo_por_segundo: float = 2.0
+@export var aumento_pasivo_por_segundo: float = 0.3
 @export var umbral_sospecha:        float = 50.0
 @export var chaos_per_failed_task:  float = 10.0
 
@@ -45,10 +45,13 @@ var _inspeccion_en_progreso: bool = false
 
 func _ready() -> void:
 	add_to_group("boss_manager")
-	# Only the server runs the anger accumulation loop
-	set_process(multiplayer.is_server())
+	# Process stays enabled; _process checks authoritative status itself. The
+	# scene loads before the host/join choice assigns the MultiplayerPeer.
+	set_process(true)
 
 func _process(delta: float) -> void:
+	if not GameManager.es_servidor_activo():
+		return
 	if estado_actual == BossState.INSPECTING:
 		return  # GameManager drives inspection; we pause passive anger
 
@@ -63,7 +66,7 @@ func _process(delta: float) -> void:
 ## Can be called from any peer; only the server acts on it.
 @rpc("any_peer", "call_local")
 func agregar_caos(cantidad: float) -> void:
-	if not multiplayer.is_server():
+	if not GameManager.es_servidor_activo():
 		return
 	_modify_anger(cantidad)
 

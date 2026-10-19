@@ -9,12 +9,12 @@ class_name ControladorTiempo
 # ---------------------------------------------------------------------------
 # Exports
 # ---------------------------------------------------------------------------
-@export var duracion_jornada: float = 180.0  # seconds (3 minutes default)
+@export var duracion_jornada: float = 480.0  # seconds (8 real minutes)
 
 # ---------------------------------------------------------------------------
 # Synchronized state
 # ---------------------------------------------------------------------------
-@export var tiempo_restante: float = 180.0
+@export var tiempo_restante: float = 480.0
 @export var jornada_iniciada: bool = false
 
 # ---------------------------------------------------------------------------
@@ -29,10 +29,13 @@ signal jornada_terminada
 func _ready() -> void:
 	add_to_group("proveedor_tiempo")
 	tiempo_restante = duracion_jornada
-	# Server drives the clock; clients read the synchronized value
-	set_process(multiplayer.is_server())
+	# Process stays enabled; _process checks authoritative status itself. The
+	# scene loads before the host/join choice assigns the MultiplayerPeer.
+	set_process(true)
 
 func _process(delta: float) -> void:
+	if not GameManager.es_servidor_activo():
+		return
 	if not jornada_iniciada:
 		return
 	tiempo_restante -= delta
@@ -48,14 +51,14 @@ func _process(delta: float) -> void:
 
 ## Start the workday. Server-authoritative; clients call via RPC.
 func intentar_fichar_entrada() -> void:
-	if multiplayer.is_server():
+	if GameManager.es_servidor_activo():
 		_server_start_day()
 	else:
 		rpc_id(1, "_rpc_request_start")
 
 @rpc("any_peer", "reliable")
 func _rpc_request_start() -> void:
-	if multiplayer.is_server():
+	if GameManager.es_servidor_activo():
 		_server_start_day()
 
 func _server_start_day() -> void:

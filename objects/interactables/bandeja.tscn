@@ -1,7 +1,7 @@
-[gd_scene load_steps=5 format=3 uid="uid://gy3jqerbt7da"]
+[gd_scene format=3 uid="uid://gy3jqerbt7da"]
 
-[ext_resource type="Script" path="res://objects/interactables/bandeja_entrada.gd" id="1_entrada"]
-[ext_resource type="Script" path="res://objects/interactables/bandeja_salida.gd" id="2_salida"]
+[ext_resource type="Script" uid="uid://v4x67yamijx" path="res://objects/interactables/bandeja_entrada.gd" id="1_entrada"]
+[ext_resource type="Script" uid="uid://ds2vkc8xn6c7m" path="res://objects/interactables/bandeja_salida.gd" id="2_salida"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_s7xps"]
 size = Vector3(0.764, 0.117, 1)
@@ -12,42 +12,42 @@ size = Vector3(0.769, 0.125, 1)
 [sub_resource type="BoxShape3D" id="BoxShape3D_mucsy"]
 size = Vector3(0.738, 0.271, 0.987)
 
-[node name="Bandeja" type="StaticBody3D" node_paths=PackedStringArray("mesh_bandeja")]
+[node name="Bandeja" type="StaticBody3D" unique_id=1231634242 node_paths=PackedStringArray("mesh_bandeja")]
 collision_mask = 5
 script = ExtResource("1_entrada")
 mesh_bandeja = NodePath("MeshInstance3D")
 
-[node name="PuntoSpawn" type="Marker3D" parent="."]
+[node name="PuntoSpawn" type="Marker3D" parent="." unique_id=407623508]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.10670471, 0)
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=1017184329]
 mesh = SubResource("BoxMesh_s7xps")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1745496481]
 shape = SubResource("BoxShape3D_lj2be")
 
-[node name="Timer" type="Timer" parent="."]
+[node name="Timer" type="Timer" parent="." unique_id=2018997756]
 wait_time = 5.0
 autostart = true
 
-[node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="."]
+[node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="." unique_id=1809315371]
 _spawnable_scenes = PackedStringArray("uid://eb3mgjibxhjq")
 spawn_path = NodePath("..")
 
-[node name="BandejaSalida" type="StaticBody3D" parent="." node_paths=PackedStringArray("mesh_bandeja")]
+[node name="BandejaSalida" type="StaticBody3D" parent="." unique_id=1777496837 node_paths=PackedStringArray("mesh_bandeja")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.771, 0, 0)
 script = ExtResource("2_salida")
 mesh_bandeja = NodePath("MeshInstance3D")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="BandejaSalida"]
+[node name="MeshInstance3D" type="MeshInstance3D" parent="BandejaSalida" unique_id=2084519307]
 mesh = SubResource("BoxMesh_s7xps")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="BandejaSalida"]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="BandejaSalida" unique_id=1667644430]
 shape = SubResource("BoxShape3D_lj2be")
 
-[node name="DetectorSalida" type="Area3D" parent="BandejaSalida"]
+[node name="DetectorSalida" type="Area3D" parent="BandejaSalida" unique_id=1776672013]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.14511108, 0)
 collision_mask = 5
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="BandejaSalida/DetectorSalida"]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="BandejaSalida/DetectorSalida" unique_id=269417832]
 shape = SubResource("BoxShape3D_mucsy")

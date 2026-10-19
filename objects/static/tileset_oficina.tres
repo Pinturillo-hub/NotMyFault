@@ -1,4 +1,4 @@
-[gd_resource type="MeshLibrary" load_steps=48 format=4 uid="uid://dllmk8tjwqw0n"]
+[gd_resource type="MeshLibrary" format=4 uid="uid://dllmk8tjwqw0n"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_lbxym"]
 resource_local_to_scene = true
