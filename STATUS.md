@@ -19,9 +19,12 @@ Fase 1: Prototipo Core / Sandbox Local
 [x] Agarre a dos manos sobre el mismo objeto: el segundo intentar_coger() del mismo jugador activa agarre_doble (sin forcejeo) y multiplica el muelle/arrastre por FUERZA_DOS_MANOS (1.8) y la ralentización por BONUS_DOS_MANOS (1.4, tope 1.0). Solo la mano derecha envía objetivos físicos cuando ambas sujetan lo mismo.
 [x] Lanzamiento por peso: Mano.soltar() trata velocidad_lanzamiento (4..12 m/s) como velocidad objetivo y la convierte en impulso (velocidad * masa * factor de clase), de modo que los ligeros vuelan rápido y los pesados apenas salen.
 [x] Bolsillo y Cambiazo: los objetos PESADOS no se pueden guardar en el bolsillo ("Demasiado pesado...") ni usar para un Cambiazo (se valida en servidor).
-[x] Sistema de lanzamiento de objetos (barra de carga visual).
+[x] Botón de mano: click corto (< tiempo_para_lanzar) deja el objeto pegado (agarre débil); mantener el click es el "agarre fuerte" (solo se lleva mientras se mantiene; al soltar el objeto cae). Ya no se muestra la barra de carga mientras se mantiene.
 [x] Modo fantasma para colocación precisa (Tecla E).
-[x] Lógica de forcejeo (Tug-of-War) entre dos jugadores.
+[x] Lanzamiento por giro de cámara: mantener el click y mover/girar la cámara por encima de giro_minimo (1 rad/s) lanza el objeto en la dirección del giro con velocidad objetivo 2..5 m/s x factor de peso (poca intensidad); por debajo, soltar solo suelta. La velocidad se IMPONE (linear_velocity = velocidad_final) para que la inercia de la mano no se sume.
+[x] Robo desde la mano: apuntando al objeto que otro sostiene, un click lo arrebata si la víctima lo lleva con agarre débil (click simple); si la víctima mantiene el click (agarre fuerte) el ladrón debe mantener también el click e iniciar un forcejeo.
+[x] Forcejeo (tug-of-war) real entre dos jugadores: el objeto queda colgado entre ambos y no persigue a ninguna mano; cada uno tira alejando la mano (arrastrando el ratón o caminando hacia atrás) y el servidor acumula el tirón de cada uno. Al alcanzar TUG_UMBRAL (4 m de tirón total) o agotar TUG_DURACION_MAX (6 s), quien tiró más se queda el objeto y el otro tropieza. Si uno suelta el click durante la disputa, ambos tropiezan y el objeto sale disparado (TUG_ESCAPE_SPEED = 7 m/s).
+[x] UI de potencia de agarre: dos barras que crecen desde el centro (verde tú a la derecha, roja el rival a la izquierda) más un Label de estado ("VAS GANANDO" / "TE ARRASTRAN, TIRA HACIA ATRÁS" / "EMPATE...").
 
 2. Gestión de Inventario y Bolsillo Ciego
 [x] Input para guardar (Pitch < -60º).

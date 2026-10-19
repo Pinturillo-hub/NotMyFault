@@ -91,6 +91,13 @@ var _tiempo_pista: float = 0.0
 var _barra_tension: ProgressBar = null
 var _estilo_tension: StyleBoxFlat = null
 
+# Tug-of-war grip power bar (local only)
+var _barra_disputa: ProgressBar = null
+var _barra_disputa_rival: ProgressBar = null
+var _label_disputa: Label = null
+var _estilo_disputa: StyleBoxFlat = null
+var _estilo_disputa_rival: StyleBoxFlat = null
+
 # Debug-only local role indicator (never replicated, hidden in release builds)
 var _label_rol: Label = null
 
@@ -151,6 +158,7 @@ func _setup_local_player() -> void:
 	_crear_label_rol()
 	_crear_back_cast()
 	_crear_barra_tension()
+	_crear_barra_disputa()
 
 func _setup_remote_player() -> void:
 	_camara.current = false
@@ -272,6 +280,7 @@ func _process(delta: float) -> void:
 	_process_steal_progress(delta)
 	_update_crosshair()
 	_actualizar_barra_tension()
+	_actualizar_barra_disputa()
 	if not _volcando:
 		_animate_visuals(delta, linear_velocity)
 
@@ -806,6 +815,104 @@ func _actualizar_barra_tension() -> void:
 	_barra_tension.value = ratio * 100.0
 	if _estilo_tension:
 		_estilo_tension.bg_color = Color(0.4, 1.0, 0.4, 0.9).lerp(Color(1.0, 0.15, 0.15, 1.0), ratio)
+
+## Tug-of-war grip power: two bars grow from the screen centre, green (you) to
+## the right and red (rival) to the left, plus a hint label.
+func _crear_barra_disputa() -> void:
+	if _barra_disputa != null or not has_node("Interfaz"):
+		return
+	_label_disputa = Label.new()
+	_label_disputa.anchor_left   = 0.5
+	_label_disputa.anchor_right  = 0.5
+	_label_disputa.anchor_top    = 0.5
+	_label_disputa.anchor_bottom = 0.5
+	_label_disputa.offset_left   = -150.0
+	_label_disputa.offset_right  = 150.0
+	_label_disputa.offset_top    = -138.0
+	_label_disputa.offset_bottom = -120.0
+	_label_disputa.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_label_disputa.visible = false
+	_label_disputa.add_theme_color_override("font_color", Color.WHITE)
+	$Interfaz.add_child(_label_disputa)
+
+	_barra_disputa = ProgressBar.new()
+	_barra_disputa.anchor_left   = 0.5
+	_barra_disputa.anchor_right  = 0.5
+	_barra_disputa.anchor_top    = 0.5
+	_barra_disputa.anchor_bottom = 0.5
+	_barra_disputa.offset_left   = 3.0
+	_barra_disputa.offset_right  = 133.0
+	_barra_disputa.offset_top    = -110.0
+	_barra_disputa.offset_bottom = -92.0
+	_barra_disputa.min_value = 0.0
+	_barra_disputa.max_value = 100.0
+	_barra_disputa.show_percentage = false
+	_barra_disputa.visible = false
+	_estilo_disputa = StyleBoxFlat.new()
+	_estilo_disputa.bg_color = Color(0.25, 1.0, 0.3, 0.95)
+	_barra_disputa.add_theme_stylebox_override("fill", _estilo_disputa)
+	_barra_disputa.add_theme_stylebox_override("background", _fondo_disputa())
+	$Interfaz.add_child(_barra_disputa)
+
+	_barra_disputa_rival = ProgressBar.new()
+	_barra_disputa_rival.anchor_left   = 0.5
+	_barra_disputa_rival.anchor_right  = 0.5
+	_barra_disputa_rival.anchor_top    = 0.5
+	_barra_disputa_rival.anchor_bottom = 0.5
+	_barra_disputa_rival.offset_left   = -133.0
+	_barra_disputa_rival.offset_right  = -3.0
+	_barra_disputa_rival.offset_top    = -110.0
+	_barra_disputa_rival.offset_bottom = -92.0
+	_barra_disputa_rival.min_value = 0.0
+	_barra_disputa_rival.max_value = 100.0
+	_barra_disputa_rival.show_percentage = false
+	_barra_disputa_rival.visible = false
+	_barra_disputa_rival.fill_mode = ProgressBar.FILL_END_TO_BEGIN
+	_estilo_disputa_rival = StyleBoxFlat.new()
+	_estilo_disputa_rival.bg_color = Color(1.0, 0.2, 0.2, 0.95)
+	_barra_disputa_rival.add_theme_stylebox_override("fill", _estilo_disputa_rival)
+	_barra_disputa_rival.add_theme_stylebox_override("background", _fondo_disputa())
+	$Interfaz.add_child(_barra_disputa_rival)
+
+func _fondo_disputa() -> StyleBoxFlat:
+	var fondo := StyleBoxFlat.new()
+	fondo.bg_color = Color(0.0, 0.0, 0.0, 0.55)
+	return fondo
+
+## Green grows right (you), red grows left (rival); tied = both halves filled.
+func _actualizar_barra_disputa() -> void:
+	if _barra_disputa == null:
+		return
+	var obj := _objeto_en_disputa()
+	if obj == null:
+		_barra_disputa.visible = false
+		_barra_disputa_rival.visible = false
+		_label_disputa.visible = false
+		return
+	var mi_id := multiplayer.get_unique_id()
+	var propio := obj.tug_pull_1 if obj.id_sostenedor_1 == mi_id else obj.tug_pull_2
+	var rival  := obj.tug_pull_2 if obj.id_sostenedor_1 == mi_id else obj.tug_pull_1
+	var total  := propio + rival
+	var mio    := 0.5 if total <= 0.0 else propio / total
+	_barra_disputa.visible = true
+	_barra_disputa_rival.visible = true
+	_label_disputa.visible = true
+	_barra_disputa.value = mio * 100.0
+	_barra_disputa_rival.value = (1.0 - mio) * 100.0
+	if mio > 0.55:
+		_label_disputa.text = "AGARRE — VAS GANANDO"
+	elif mio < 0.45:
+		_label_disputa.text = "AGARRE — TE ARRASTRAN, TIRA HACIA ATRÁS"
+	else:
+		_label_disputa.text = "AGARRE — EMPATE, TIRA HACIA ATRÁS"
+
+func _objeto_en_disputa() -> ObjetoAgarrable:
+	var manos: Array[Mano] = [_mano_der, _mano_izq]
+	for mano: Mano in manos:
+		var obj := mano.objeto_agarrado
+		if obj != null and obj.en_disputa:
+			return obj
+	return null
 
 func _crear_label_pista() -> void:
 	if _label_pista != null or not has_node("Interfaz"):

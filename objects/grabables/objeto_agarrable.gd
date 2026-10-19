@@ -75,12 +75,18 @@ const ANGULAR_DAMPING   : float = 2.0
 const ARRASTRE_GANANCIA : float = 4.0
 const ARRASTRE_GIRO     : float = 0.2
 const LIMBO_POSITION    : Vector3 = Vector3(0.0, -200.0, 0.0)
-const TUG_RESOLVE_DELAY : float  = 1.5
-const TUG_WIN_MARGIN    : float  = 5.0
 ## Extra force when both hands of the same player drive the prop.
 const FUERZA_DOS_MANOS  : float  = 1.8
 ## Minimum gap between two impact knocks from the same thrown object.
 const GOLPE_COOLDOWN_MS : int    = 600
+## Total pull (both players) needed to settle a tug.
+const TUG_UMBRAL        : float  = 4.0
+## Safety timeout: if nobody reaches the threshold, the current holder keeps it.
+const TUG_DURACION_MAX  : float  = 6.0
+## Speed the object shoots away at when a tug is abandoned (both stumble).
+const TUG_ESCAPE_SPEED  : float  = 7.0
+## How close the thief must be to a victim's hand to try a hand steal.
+const ROBO_ALCANCE      : float  = 3.5
 
 # ---------------------------------------------------------------------------
 # Exports
@@ -123,6 +129,9 @@ const GOLPE_COOLDOWN_MS : int    = 600
 @export var agarre_fuerte: bool = false
 ## Peer id of the player who pocketed this object (0 = nobody)
 @export var en_bolsillo_de_id: int = 0
+## Tug-of-war pull accumulated by each holder, replicated for the power UI.
+var tug_pull_1: float = 0.0
+var tug_pull_2: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Public weight values (read by Mano / Jugador; derived from CONFIG_PESO)
@@ -151,16 +160,15 @@ var _target_position: Vector3  = Vector3.ZERO
 var _target_rotation: Quaternion = Quaternion.IDENTITY
 var _time_since_last_order: float = 0.0
 var _pending_order: bool = false
-var _tug_force_holder_1: float = 0.0
-var _tug_force_holder_2: float = 0.0
+var _tug_pull_1: float = 0.0
+var _tug_pull_2: float = 0.0
+var _tug_inicio_ms: int = 0
 var _stiffness_multiplier: float = 1.0
 var _original_collision_mask: int = 0
 var _teleport_frames: int = 0
 ## Position where the object spawned; used as its original pedestal.
 var _posicion_pedestal: Vector3 = Vector3.ZERO
 var _pedestal_registrado: bool = false
-## Cancellation token for tug-of-war coroutine
-var _tug_active: bool = false
 ## Cached weight config (avoid dictionary lookups in the physics loop).
 var _escala_muelle: float = 1.0
 var _gravedad_sostenido: float = 0.0
@@ -238,6 +246,13 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		return
 
 	if not GameManager.es_servidor_activo():
+		return
+
+	# A contested prop hangs between the two pullers: it does not chase either
+	# hand, it just damps in place until the tug resolves.
+	if en_disputa:
+		state.linear_velocity  *= 0.8
+		state.angular_velocity *= 0.8
 		return
 
 	_time_since_last_order += state.step
@@ -319,6 +334,10 @@ func intentar_coger(solicitante_id: int) -> void:
 	# Blocked: someone else's pocket
 	if en_bolsillo_de_id != 0 and en_bolsillo_de_id != solicitante_id:
 		return
+	# A hand steal must be within reach of the object.
+	var solicitante := _find_player(solicitante_id)
+	if solicitante != null and solicitante.global_position.distance_to(global_position) > ROBO_ALCANCE:
+		return
 
 	if id_sostenedor_1 == 0:
 		_assign_holder(solicitante_id)
@@ -327,19 +346,31 @@ func intentar_coger(solicitante_id: int) -> void:
 		agarre_doble = true
 	elif id_sostenedor_1 != solicitante_id and id_sostenedor_2 == 0:
 		if agarre_fuerte:
+			# Strong grip: the thief must out-pull the holder in a tug-of-war.
 			_start_tug_of_war(solicitante_id)
 		else:
+			# Weak grip (simple click): stolen outright.
 			_assign_holder(solicitante_id)
 
 @rpc("any_peer", "call_local", "reliable")
-func intentar_soltar(solicitante_id: int, impulso: Vector3, carga: float = 0.0) -> void:
+func intentar_soltar(solicitante_id: int, impulso: Vector3, carga: float = 0.0, velocidad_final: Vector3 = Vector3.ZERO) -> void:
 	if not multiplayer.is_server():
 		return
-	_lanzado = impulso != Vector3.ZERO
+	# Letting go mid-tug abandons the contest: both players stumble and the
+	# object shoots away.
+	if en_disputa and (id_sostenedor_1 == solicitante_id or id_sostenedor_2 == solicitante_id):
+		_abortar_disputa()
+		return
+	# velocidad_final replaces the current velocity (a swing throw, so the hand's
+	# momentum is not added on top); impulso adds to it (legacy throws).
+	_lanzado = impulso != Vector3.ZERO or velocidad_final != Vector3.ZERO
 	if _lanzado:
 		_fuerza_lanzamiento = carga
 		_ultimo_lanzador_id = solicitante_id
-		apply_central_impulse(impulso)
+		if velocidad_final != Vector3.ZERO:
+			linear_velocity = velocidad_final
+		else:
+			apply_central_impulse(impulso)
 	_remove_collision_exception(solicitante_id)
 	if id_sostenedor_1 == solicitante_id:
 		id_sostenedor_1 = 0
@@ -353,7 +384,11 @@ func intentar_soltar(solicitante_id: int, impulso: Vector3, carga: float = 0.0) 
 
 @rpc("any_peer", "call_local", "reliable")
 func actualizar_tipo_agarre(es_fuerte: bool) -> void:
-	if multiplayer.get_remote_sender_id() == id_sostenedor_1:
+	# Host-local RPCs have no remote sender; fall back to our own id.
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
+	if sender == id_sostenedor_1:
 		agarre_fuerte = es_fuerte
 
 # ---------------------------------------------------------------------------
@@ -386,6 +421,7 @@ func entrar_en_bolsillo(id_dueno: int) -> void:
 	id_sostenedor_2   = 0
 	en_disputa        = false
 	agarre_doble      = false
+	agarre_fuerte     = false
 	_lanzado          = false
 	_configure_physics_pocket()
 
@@ -472,32 +508,80 @@ func _rpc_set_reparado(valor: bool) -> void:
 func _start_tug_of_war(retador_id: int) -> void:
 	id_sostenedor_2 = retador_id
 	en_disputa      = true
-	_tug_active     = true
+	_tug_pull_1     = 0.0
+	_tug_pull_2     = 0.0
+	_tug_inicio_ms  = Time.get_ticks_msec()
 	_broadcast_state.rpc(id_sostenedor_1, id_sostenedor_2, true)
-	disputa_iniciada.emit()
-	_resolve_tug_of_war()
+	_rpc_tug_progreso.rpc(0.0, 0.0)
+	# Server-side: hold the prop in the air while the tug lasts.
+	gravity_scale = 0.0
 
-func _resolve_tug_of_war() -> void:
-	await get_tree().create_timer(TUG_RESOLVE_DELAY).timeout
-	if not _tug_active:
-		return  # Was cancelled (e.g. someone let go during the wait)
-	_tug_active = false
-	var winner := id_sostenedor_1
-	if _tug_force_holder_2 > (_tug_force_holder_1 + TUG_WIN_MARGIN):
-		winner = id_sostenedor_2
-	_tug_force_holder_1 = 0.0
-	_tug_force_holder_2 = 0.0
-	_assign_holder(winner)
-
+## Each holder reports the distance they pulled this frame. First to drag the
+## object past TUG_UMBRAL wins; a timeout favours whoever pulled more.
 @rpc("any_peer", "call_local", "unreliable")
 func enviar_fuerza_tiro(fuerza: float) -> void:
-	if not en_disputa:
+	if not multiplayer.is_server() or not en_disputa or fuerza <= 0.0:
 		return
 	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
 	if sender == id_sostenedor_1:
-		_tug_force_holder_1 += fuerza
+		_tug_pull_1 += fuerza
 	elif sender == id_sostenedor_2:
-		_tug_force_holder_2 += fuerza
+		_tug_pull_2 += fuerza
+	else:
+		return
+	_rpc_tug_progreso.rpc(_tug_pull_1, _tug_pull_2)
+	var agotado := Time.get_ticks_msec() - _tug_inicio_ms >= int(TUG_DURACION_MAX * 1000.0)
+	var total := _tug_pull_1 + _tug_pull_2
+	if total >= TUG_UMBRAL or agotado:
+		var gana_1 := _tug_pull_1 >= _tug_pull_2
+		_resolver_disputa(id_sostenedor_1 if gana_1 else id_sostenedor_2)
+
+@rpc("authority", "call_local", "unreliable")
+func _rpc_tug_progreso(pull1: float, pull2: float) -> void:
+	tug_pull_1 = pull1
+	tug_pull_2 = pull2
+
+func _resolver_disputa(ganador_id: int) -> void:
+	var perdedor_id := id_sostenedor_2 if ganador_id == id_sostenedor_1 else id_sostenedor_1
+	tug_pull_1 = 0.0
+	tug_pull_2 = 0.0
+	_assign_holder(ganador_id)
+	_hacer_tropezar(perdedor_id)
+
+## Someone let go mid-tug: both stumble and the object flies free.
+func _abortar_disputa() -> void:
+	var p1 := id_sostenedor_1
+	var p2 := id_sostenedor_2
+	tug_pull_1 = 0.0
+	tug_pull_2 = 0.0
+	_remove_collision_exception(p1)
+	_remove_collision_exception(p2)
+	id_sostenedor_1  = 0
+	id_sostenedor_2  = 0
+	en_disputa       = false
+	agarre_doble     = false
+	_lanzado         = true
+	_fuerza_lanzamiento = 1.0
+	_ultimo_lanzador_id = p1
+	_configure_physics_free()
+	set_deferred("freeze", false)
+	var dir := Vector3(randf_range(-1.0, 1.0), 1.0, randf_range(-1.0, 1.0)).normalized()
+	linear_velocity = dir * TUG_ESCAPE_SPEED
+	_broadcast_state.rpc(0, 0, false)
+	_hacer_tropezar(p1)
+	_hacer_tropezar(p2)
+
+func _hacer_tropezar(player_id: int) -> void:
+	var player := _find_player(player_id) as Node3D
+	if player == null:
+		return
+	var dir: Vector3 = player.global_position - global_position
+	dir.y = 0.0
+	if dir.is_zero_approx():
+		dir = Vector3.FORWARD
+	player.rpc("_rpc_tropiezo", dir.normalized(), tiempo_tropiezo)
 
 # ---------------------------------------------------------------------------
 # Physics configuration helpers
@@ -558,7 +642,6 @@ func _assign_holder(new_id: int) -> void:
 	agarre_doble      = false
 	_lanzado          = false
 	en_bolsillo_de_id = 0
-	_tug_active       = false
 	_configure_physics_held()
 	if new_id != 0:
 		_add_collision_exception(new_id)

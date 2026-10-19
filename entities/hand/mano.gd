@@ -9,15 +9,21 @@ class_name Mano
 # Exports
 # ---------------------------------------------------------------------------
 @export var es_mano_izquierda: bool = false
-## Target throw speeds (m/s). Each weight class multiplies these.
-@export var velocidad_lanzamiento: float = 4.0
-@export var velocidad_lanzamiento_maxima: float = 12.0
+## Swing-throw target speeds (m/s). Each weight class multiplies these.
+@export var velocidad_lanzamiento: float = 2.0
+@export var velocidad_lanzamiento_maxima: float = 5.0
 @export var offset_reposo_cuerpo: Vector3 = Vector3(0.4, 1.0, -0.6)
 
 @export_group("Timings")
+## Press shorter than this = simple click (object stays stuck). Longer = hold
+## grip (carry only while held, release drops/throws).
 @export var tiempo_para_lanzar:  float = 0.3
-@export var tiempo_carga_maxima: float = 2.0
-@export var tiempo_limite_caida: float = 3.0
+
+@export_group("Lanzamiento por giro")
+## Minimum camera swing (rad/s) for a held release to throw instead of drop.
+@export var giro_minimo: float = 1.0
+## Swing speed (rad/s) that reaches full throw power.
+@export var giro_maximo: float = 8.0
 
 # Set by Jugador after instantiation
 var barra_carga_ui: ProgressBar = null
@@ -52,6 +58,13 @@ var _tiempo_desde_agarre:   float = 0.0
 var _tiempo_tenso:          float = 0.0
 var _z_original_accion:     float = 0.0
 var _tween_activo:          Tween = null
+## Smoothed head angular speed (rad/s) and hand velocity, used to throw by swing.
+var _giro_actual:           float = 0.0
+var _velocidad_mano:        Vector3 = Vector3.ZERO
+var _pos_mano_previa:       Vector3 = Vector3.ZERO
+var _basis_accion_previa:   Basis = Basis.IDENTITY
+## Last strong/weak grip flag sent to the server (edge detection).
+var _agarre_fuerte_enviado: bool = false
 
 # Placement mode
 var _modo_colocacion:       bool  = false
@@ -84,31 +97,60 @@ func _ready() -> void:
 	await get_tree().process_frame
 	if _jugador:
 		_update_visuals(0.0)
+	_pos_mano_previa     = pos_accion.global_position
+	_basis_accion_previa = pos_accion.global_transform.basis
 
 func _physics_process(delta: float) -> void:
+	_actualizar_giro_y_agarre(delta)
 	_update_hold_timer(delta)
 	_update_held_object()
 	_update_visuals(delta)
 
+## Tracks camera swing (for swing-to-throw) and hand travel (for tug input).
+func _actualizar_giro_y_agarre(delta: float) -> void:
+	var pos_actual := pos_accion.global_position
+	var basis_actual := pos_accion.global_transform.basis
+	if delta > 0.0:
+		_velocidad_mano = (pos_actual - _pos_mano_previa) / delta
+		var q_prev := _basis_accion_previa.get_rotation_quaternion()
+		var q_actual := basis_actual.get_rotation_quaternion()
+		var angulo := q_prev.inverse().angle_to(q_actual)
+		_giro_actual = lerpf(_giro_actual, angulo / delta, minf(delta * 12.0, 1.0))
+	_pos_mano_previa     = pos_actual
+	_basis_accion_previa = basis_actual
+
+	if objeto_agarrado == null:
+		return
+	# Strong grip = holding the button (defends against a steal/tug).
+	var fuerte := _esta_pulsando and not _en_disputa_activa
+	if fuerte != _agarre_fuerte_enviado:
+		_agarre_fuerte_enviado = fuerte
+		objeto_agarrado.rpc("actualizar_tipo_agarre", fuerte)
+	# During a tug, dragging the hand away from the object is the pull input.
+	if _en_disputa_activa and _esta_pulsando:
+		var alejamiento := pos_actual - objeto_agarrado.global_position
+		if alejamiento.length_squared() > 0.0001:
+			var tiron := _velocidad_mano.dot(alejamiento.normalized()) * delta
+			if tiron > 0.0:
+				objeto_agarrado.rpc("enviar_fuerza_tiro", tiron)
+
 func _update_hold_timer(delta: float) -> void:
-	if _esta_pulsando and objeto_agarrado != null and not _ignorar_soltar and not _modo_colocacion:
+	if _esta_pulsando and objeto_agarrado != null and not _modo_colocacion:
 		_tiempo_pulsado += delta
-		if _tiempo_pulsado >= tiempo_limite_caida:
-			# Object slipped
-			soltar(false)
-			_reset_input_state()
-		else:
-			_set_charge_bar_visible(true, _tiempo_pulsado / tiempo_limite_caida)
-	else:
-		_set_charge_bar_visible(false)
+	# No charge/swing bar: nothing to preview while the button is still held.
+	_set_charge_bar_visible(false)
 
 func _update_held_object() -> void:
 	if objeto_agarrado == null:
 		return
 	_tiempo_desde_agarre += get_physics_process_delta_time()
-	# If we lost authority (someone else grabbed it), clean up
+	# If we lost authority (someone else grabbed it), clean up. A tug keeps both
+	# hands in play until the server settles it.
 	if _tiempo_desde_agarre > 0.5 and not _en_disputa_activa:
-		if is_instance_valid(objeto_agarrado) and objeto_agarrado.id_sostenedor_1 != multiplayer.get_unique_id():
+		var mi_id := multiplayer.get_unique_id()
+		if (is_instance_valid(objeto_agarrado)
+				and objeto_agarrado.id_sostenedor_1 != mi_id
+				and objeto_agarrado.id_sostenedor_2 != mi_id):
 			limpiar_estado_local()
 			return
 	if is_instance_valid(objeto_agarrado):
@@ -185,10 +227,40 @@ func gestionar_input(
 	else:
 		_modo_manosear = false
 		if not just_pressed:
-			if objeto_agarrado != null and not _ignorar_soltar:
-				_decide_final_action()
+			_al_soltar_boton()
 			_ignorar_soltar = false
 			_tiempo_pulsado = 0.0
+
+## Resolves what a button release means for the current grip:
+##  - mid-tug      -> let go (server makes both stumble, object flies)
+##  - long hold    -> drop, or throw if the camera is swinging
+##  - short click  -> keep stuck (simple click); if it was already held, use it
+func _al_soltar_boton() -> void:
+	if objeto_agarrado == null:
+		return
+	if _en_disputa_activa:
+		soltar(false)
+	elif _tiempo_pulsado >= tiempo_para_lanzar:
+		_soltar_por_agarre()
+	elif not _ignorar_soltar:
+		_decide_final_action()
+
+## Hold-mode release: a camera swing whips the object away, otherwise it drops.
+func _soltar_por_agarre() -> void:
+	if objeto_agarrado == null:
+		return
+	if _giro_actual < giro_minimo:
+		soltar(false)
+		return
+	var direccion := _velocidad_mano.normalized()
+	if direccion.is_zero_approx():
+		direccion = -pos_accion.global_transform.basis.z
+	var intensidad := clampf((_giro_actual - giro_minimo) / maxf(giro_maximo - giro_minimo, 0.01), 0.0, 1.0)
+	var velocidad := lerpf(velocidad_lanzamiento, velocidad_lanzamiento_maxima, intensidad) * objeto_agarrado.factor_lanzamiento
+	# Overwrite velocity instead of adding an impulse so the hand's momentum does
+	# not stack on top of the throw (a soft flick stays soft).
+	objeto_agarrado.rpc("intentar_soltar", multiplayer.get_unique_id(), Vector3.ZERO, 1.0, direccion * velocidad)
+	limpiar_estado_local()
 
 # ---------------------------------------------------------------------------
 # Grab
@@ -198,10 +270,17 @@ func _try_grab(cuerpo: ObjetoAgarrable, punto_impacto: Vector3) -> void:
 	if cuerpo == null:
 		return
 	_connect_dispute_signals(cuerpo)
-	cuerpo.rpc("intentar_coger", multiplayer.get_unique_id())
+	# Assign the local grip before the RPC: on the host the server resolves the
+	# grab synchronously (call_local) and may start a tug, whose disputa_iniciada
+	# signal only matches the hand if objeto_agarrado already points at it.
 	objeto_agarrado      = cuerpo
 	_punto_agarre_local  = cuerpo.to_local(punto_impacto)
 	_tiempo_desde_agarre = 0.0
+	# Forget any camera motion from before the grab: only the swing during the
+	# hold should power a throw.
+	_giro_actual         = 0.0
+	_velocidad_mano      = Vector3.ZERO
+	cuerpo.rpc("intentar_coger", multiplayer.get_unique_id())
 	if _jugador:
 		_jugador.add_collision_exception_with(cuerpo)
 
@@ -224,17 +303,11 @@ func forzar_agarre_inmediato(cuerpo: ObjetoAgarrable, posicion_mundo: Vector3) -
 # Release / Throw
 # ---------------------------------------------------------------------------
 
-func soltar(lanzar: bool, velocidad_custom: float = -1.0, carga: float = 0.0) -> void:
+func soltar(_lanzar: bool = false) -> void:
 	if objeto_agarrado == null:
 		return
-	var velocidad := velocidad_custom if velocidad_custom >= 0.0 else velocidad_lanzamiento
-	var impulso := Vector3.ZERO
-	if lanzar:
-		# The value is a target speed: convert it to an impulse using the class
-		# mass so light objects fly faster and heavy ones barely leave the hand.
-		velocidad *= objeto_agarrado.factor_lanzamiento
-		impulso = -pos_accion.global_transform.basis.z * velocidad * objeto_agarrado.mass
-	objeto_agarrado.rpc("intentar_soltar", multiplayer.get_unique_id(), impulso, carga)
+	# Releasing without a swing just drops the object (no impulse).
+	objeto_agarrado.rpc("intentar_soltar", multiplayer.get_unique_id(), Vector3.ZERO, 0.0)
 	limpiar_estado_local()
 
 func limpiar_estado_local() -> void:
@@ -247,29 +320,26 @@ func limpiar_estado_local() -> void:
 	_punto_agarre_local = Vector3.ZERO
 	_tiempo_tenso       = 0.0
 	tension_agarre      = 0.0
+	_agarre_fuerte_enviado = false
+	_giro_actual        = 0.0
 	_set_charge_bar_visible(false)
 
+## Short tap on an object that was already in the hand: use it (stamp, strike).
 func _decide_final_action() -> void:
 	if objeto_agarrado == null:
 		return
-	if _tiempo_pulsado < tiempo_para_lanzar:
-		if objeto_agarrado.has_method("usar_objeto"):
-			objeto_agarrado.rpc("usar_objeto")
-		if objeto_agarrado.usar_animacion_golpe:
-			_animate_strike(objeto_agarrado.distancia_golpe)
-		else:
-			_animate_use_soft()
+	if objeto_agarrado.has_method("usar_objeto"):
+		objeto_agarrado.rpc("usar_objeto")
+	if objeto_agarrado.usar_animacion_golpe:
+		_animate_strike(objeto_agarrado.distancia_golpe)
 	else:
-		var rango: float  = tiempo_carga_maxima - tiempo_para_lanzar
-		var carga: float  = clamp((_tiempo_pulsado - tiempo_para_lanzar) / rango, 0.0, 1.0)
-		var velocidad: float = lerp(velocidad_lanzamiento, velocidad_lanzamiento_maxima, carga)
-		soltar(true, velocidad, carga)
+		_animate_use_soft()
 
 ## Heavy props pull on a short leash: if the hand gets too far from the object
 ## the grip snaps and the player stumbles.
 func _comprobar_tiron() -> void:
 	tension_agarre = 0.0
-	if _jugador == null or _tiempo_desde_agarre < 0.8:
+	if _jugador == null or _tiempo_desde_agarre < 0.8 or _en_disputa_activa:
 		return
 	var distancia_max := objeto_agarrado.tiron_max
 	if is_inf(distancia_max):
@@ -467,9 +537,9 @@ func _set_charge_bar_visible(visible_flag: bool, ratio: float = 0.0) -> void:
 	barra_carga_ui.visible = visible_flag
 	if visible_flag:
 		barra_carga_ui.value = ratio * 100.0
-		if _tiempo_pulsado < tiempo_para_lanzar:
+		if ratio < 0.33:
 			barra_carga_ui.modulate = Color.GREEN
-		elif _tiempo_pulsado < tiempo_carga_maxima:
+		elif ratio < 0.66:
 			barra_carga_ui.modulate = Color.YELLOW
 		else:
 			barra_carga_ui.modulate = Color.RED
@@ -479,13 +549,6 @@ func _set_charge_bar_visible(visible_flag: bool, ratio: float = 0.0) -> void:
 # ---------------------------------------------------------------------------
 # Dispute signal wiring
 # ---------------------------------------------------------------------------
-
-func _reset_input_state() -> void:
-	_tiempo_pulsado = 0.0
-	_esta_pulsando  = false
-	_ignorar_soltar = true
-	_modo_manosear  = false
-	_set_charge_bar_visible(false)
 
 func _connect_dispute_signals(obj: ObjetoAgarrable) -> void:
 	if not obj.disputa_iniciada.is_connected(_on_disputa_iniciada):
@@ -506,5 +569,6 @@ func _on_disputa_iniciada(obj: ObjetoAgarrable) -> void:
 
 func _on_disputa_finalizada(ganador_id: int) -> void:
 	_en_disputa_activa = false
+	_agarre_fuerte_enviado = false
 	if ganador_id != multiplayer.get_unique_id():
 		limpiar_estado_local()

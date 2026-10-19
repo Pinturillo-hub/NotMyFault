@@ -50,7 +50,7 @@ El Inventario del jugador no usa ninguna UI bidimensional. Consta de 1 único sl
 
     Golpes: solo el portador tiene excepción de colisión con el objeto. El resto de jugadores recibe el impulso físico real (masa del jugador = 70 kg), por lo que el peso de la clase escala el golpe de forma natural: ligero apenas empuja, medio es moderado y pesado empuja fuerte.
 
-    Lanzamiento: Mano.soltar() interpreta velocidad_lanzamiento / velocidad_lanzamiento_maxima (4..12 m/s) como velocidad objetivo, la multiplica por factor_lanzamiento y la convierte en impulso (velocidad * mass). Así el objeto ligero vuela rápido y lejos, y el pesado apenas sale de la mano.
+    Lanzamiento: Mano.soltar() solo suelta (no lanza). El lanzamiento con velocidad objetivo vive ahora en el giro de cámara (ver 1.6): velocidad_lanzamiento / velocidad_lanzamiento_maxima (por defecto 2..5 m/s), multiplicada por factor_lanzamiento, de modo que el ligero vuela más y el pesado apenas sale de la mano.
 
     Bolsillo y Cambiazo: se_puede_guardar() devuelve false para PESADO. Jugador bloquea guardarlo en el bolsillo (aviso "Demasiado pesado...") y _server_process_steal() aborta el Cambiazo si el objeto del ladrón es pesado.
 
@@ -59,6 +59,25 @@ El Inventario del jugador no usa ninguna UI bidimensional. Consta de 1 único sl
     Las dos manos pueden sujetar el mismo objeto. En el servidor, un segundo intentar_coger() del mismo solicitante pone ObjetoAgarrable.agarre_doble = true; no inicia forcejeo ni reasigna el objeto. Mientras dura, _apply_spring_forces() y _apply_drag() multiplican la fuerza por FUERZA_DOS_MANOS (1.8), de modo que una mesa pesada se arrastra más rápido y responde mejor; en Jugador._factor_carga() la ralentización se multiplica por BONUS_DOS_MANOS (1.4), con tope en 1.0.
 
     Para que las dos manos no peleen por el mismo objeto, Mano.mano_companera apunta a la otra mano (se enlaza en Jugador._setup_local_player). Con las dos manos sobre el mismo objeto solo la mano derecha envía actualizar_objetivo_agarre(); la izquierda actúa como secundaria y no manda objetivos. Al soltar (cualquier mano, lanzar o colocar), el objeto se libera por completo y agarre_doble vuelve a false.
+
+1.6. Agarre débil/fuerte, lanzamiento por giro y robo desde la mano
+
+    Dos modos de agarre con el mismo botón de mano (click izquierdo = mano derecha, click derecho = mano izquierda):
+        Click corto (< tiempo_para_lanzar, 0.3 s): el objeto queda pegado a la mano. Es el "agarre débil" (ObjetoAgarrable.agarre_fuerte = false). Se lleva sin necesidad de mantener pulsado y se puede arrebatar con un click de otro jugador.
+        Mantener el click: "agarre fuerte" (agarre_fuerte = true). Se envía por RPC actualizar_tipo_agarre() al primer frame con el botón pulsado, y al soltar vuelve a false. Mientras se mantiene, soltar el botón deja caer el objeto; si además la cámara venía girando, el objeto sale lanzado.
+
+    Lanzamiento por giro de cámara (sustituye a la antigua barra de carga): Mano._actualizar_giro_y_agarre() mide la velocidad angular de la cabeza (rad/s) suavizada en _giro_actual, que se reinicia al agarrar (solo cuenta el giro durante el mantenido). Al soltar tras un mantenido, si _giro_actual >= giro_minimo (1 rad/s) el objeto se lanza en la dirección de la velocidad de la mano (si es despreciable, hacia delante de la mano) con velocidad = lerp(velocidad_lanzamiento, velocidad_lanzamiento_maxima, intensidad) x factor_lanzamiento (por defecto 2..5 m/s, poca intensidad). Por debajo del umbral solo se suelta. La velocidad del lanzamiento se IMPONE (intentar_soltar recibe velocidad_final y hace linear_velocity = velocidad_final) en lugar de sumar un impulso, para que la inercia de la mano no se apile y un giro suave salga suave. Caminar no dispara el lanzamiento (no gira la cabeza). No hay barra de carga: mientras se mantiene el click no se muestra ningún porcentaje.
+
+    Robo desde la mano (hand steal): apuntando con el raycast al objeto que sostiene otro jugador (alcance ROBO_ALCANCE = 3.5 m, validado en intentar_coger), el servidor decide:
+        Si la víctima lo lleva con agarre débil (click simple): _assign_holder(ladrón) al instante. La mano de la víctima se limpia al recibir disputa_finalizada(ganador).
+        Si la víctima lo lleva con agarre fuerte (mantiene el click): _start_tug_of_war(ladrón) y empieza el forcejeo.
+
+    Forcejeo (tug-of-war): el servidor marca en_disputa = true, id_sostenedor_2 = ladrón y pone gravity_scale = 0 al objeto. En _integrate_forces(), mientras en_disputa, el objeto no persigue a ninguna mano: solo amortigua su velocidad, de modo que queda colgado entre los dos. Cada jugador (con el click pulsado) reporta por enviar_fuerza_tiro() la distancia que ha alejado la mano del objeto este frame (arrastrando el ratón o caminando hacia atrás). El servidor acumula _tug_pull_1 / _tug_pull_2 y replica el reparto con _rpc_tug_progreso():
+        Si _tug_pull_1 + _tug_pull_2 >= TUG_UMBRAL (4 m) o se agota TUG_DURACION_MAX (6 s): gana quien más tiró; _resolver_disputa() llama a _assign_holder(ganador) y _hacer_tropezar(perdedor), que envía _rpc_tropiezo al perdedor en dirección al objeto.
+        Si cualquiera de los dos suelta el click durante la disputa: intentar_soltar() desvía a _abortar_disputa(): se sueltan ambos, el objeto sale disparado a TUG_ESCAPE_SPEED (7 m/s, marcado como lanzado para que pueda tumbar) y ambos jugadores tropiezan.
+    Mientras _en_disputa_activa, Mano._comprobar_tiron() se salta (para que el estirón no rompa el agarre) y el jugador no puede usar ni lanzar el objeto; soltar el botón aborta.
+
+    UI de potencia de agarre: Jugador._crear_barra_disputa() crea un indicador central (solo local) que se muestra mientras el jugador está en disputa: dos barras que crecen desde el centro de la pantalla, verde hacia la derecha (tú) y roja hacia la izquierda (el rival), más un Label de estado ("VAS GANANDO" / "TE ARRASTRAN, TIRA HACIA ATRÁS" / "EMPATE, TIRA HACIA ATRÁS"). El reparto sale de _tug_pull_1 / _tug_pull_2 visto desde el jugador local: empatados = ambas mitades llenas; si tiras más, la verde avanza.
 
 2. Mecánicas Sociales de Espalda (Steal / Inspect)
 Ambas mecánicas utilizan el mismo sistema subyacente: un RayCast o hitbox que detecta si estás detrás de otro jugador (dot > 0.0) manteniéndote a rango de colisión durante tiempo_para_cambiazo (1.5 segundos) mientras se rellena una barra circular (con RadialFill.gdshader).
